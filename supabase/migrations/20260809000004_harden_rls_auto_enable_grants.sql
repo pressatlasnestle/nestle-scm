@@ -1,0 +1,11 @@
+-- ============================================================================
+-- nestle-scm — Harden rls_auto_enable() grants
+--
+-- rls_auto_enable() is a pre-existing SECURITY DEFINER *event trigger* function
+-- that auto-enables RLS on newly created public tables. Event triggers fire via
+-- the DDL event system regardless of RPC EXECUTE grants, so revoking EXECUTE
+-- from the API roles does NOT change its behavior — it only closes the
+-- /rest/v1/rpc/rls_auto_enable door rather than relying on the call erroring out.
+-- Clears the linter's 0028/0029 flags for this function.
+-- ============================================================================
+revoke all on function public.rls_auto_enable() from public, anon, authenticated;
