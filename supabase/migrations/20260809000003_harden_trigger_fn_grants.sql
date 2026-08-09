@@ -1,0 +1,15 @@
+-- ============================================================================
+-- nestle-scm — Harden trigger-function grants
+--
+-- handle_new_user() is a SECURITY DEFINER trigger function. It only ever runs
+-- from the on_auth_user_created trigger (which fires as the table owner), so it
+-- should NOT be exposed as a PostgREST RPC. Revoke EXECUTE from the API roles.
+-- Clears the linter's 0028/0029 "SECURITY DEFINER function is executable" flags
+-- for this function.
+--
+-- NOTE: the role helpers (current_app_role/is_app_user/can_curate/is_admin)
+-- intentionally KEEP execute for `authenticated` — RLS policies evaluate them in
+-- the caller's role context, so the grant is required. They only ever read the
+-- caller's own role via auth.uid(), so direct RPC calls leak nothing.
+-- ============================================================================
+revoke all on function public.handle_new_user() from public, anon, authenticated;
