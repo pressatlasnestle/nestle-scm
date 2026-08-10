@@ -285,6 +285,7 @@ export type Database = {
           keyword: string
           list_type: string
           match_type: string | null
+          notes: string | null
         }
         Insert: {
           added_by?: string | null
@@ -296,6 +297,7 @@ export type Database = {
           keyword: string
           list_type?: string
           match_type?: string | null
+          notes?: string | null
         }
         Update: {
           added_by?: string | null
@@ -307,6 +309,7 @@ export type Database = {
           keyword?: string
           list_type?: string
           match_type?: string | null
+          notes?: string | null
         }
         Relationships: [
           {
