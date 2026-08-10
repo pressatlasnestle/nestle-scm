@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { shortDate } from "@/lib/format";
-import { setUserRole } from "./actions";
+import { setUserRole, inviteUser } from "./actions";
 
 export type UserRow = {
   id: string;
@@ -64,6 +64,31 @@ export function UsersTable({
     next: UserRow["role"];
   } | null>(null);
 
+  // Invite modal state
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<UserRow["role"]>("read");
+
+  function submitInvite(e: React.FormEvent) {
+    e.preventDefault();
+    const email = inviteEmail.trim();
+    if (!email) {
+      toast.error("Enter an email address.");
+      return;
+    }
+    startTransition(async () => {
+      const res = await inviteUser({ email, role: inviteRole });
+      if (res.ok) {
+        toast.success(`Invite sent to ${email} as ${ROLE_LABEL[inviteRole]}.`);
+        setInviteOpen(false);
+        setInviteEmail("");
+        setInviteRole("read");
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
   function confirmChange() {
     if (!change) return;
     const { user, next } = change;
@@ -83,10 +108,17 @@ export function UsersTable({
           <h1>Users &amp; Roles</h1>
           <p>
             Read can view everything. Curate can additionally exclude or delete
-            articles. Admin has full control, including this panel. New users
-            self-sign-up as Read; assign roles here.
+            articles. Admin has full control, including this panel. Invite a
+            user to send them a sign-in email with the role you choose.
           </p>
         </div>
+        <button
+          className="btn btn-primary"
+          onClick={() => setInviteOpen(true)}
+          disabled={pending}
+        >
+          + Invite user
+        </button>
       </div>
 
       <div className="table-card">
@@ -194,6 +226,114 @@ export function UsersTable({
             : null
         }
       />
+
+      {inviteOpen && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!pending) setInviteOpen(false);
+          }}
+        >
+          <form
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={submitInvite}
+          >
+            <h2>Invite user</h2>
+            <div className="modal-body">
+              Sends a sign-in email to this address and creates their account
+              with the role you pick. They set their own password from the email
+              link.
+            </div>
+
+            <label
+              htmlFor="invite-email"
+              style={{
+                display: "block",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                letterSpacing: "0.6px",
+                textTransform: "uppercase",
+                color: "var(--text-dim)",
+                marginBottom: 6,
+              }}
+            >
+              Email
+            </label>
+            <input
+              id="invite-email"
+              type="email"
+              autoComplete="off"
+              placeholder="person@company.com"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              disabled={pending}
+              required
+              style={{
+                width: "100%",
+                background: "var(--panel-raised)",
+                border: "1px solid var(--line)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                fontSize: 13,
+                color: "var(--text)",
+                fontFamily: "var(--font-body)",
+                marginBottom: 14,
+              }}
+            />
+
+            <label
+              htmlFor="invite-role"
+              style={{
+                display: "block",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                letterSpacing: "0.6px",
+                textTransform: "uppercase",
+                color: "var(--text-dim)",
+                marginBottom: 6,
+              }}
+            >
+              Role
+            </label>
+            <select
+              id="invite-role"
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as UserRow["role"])}
+              disabled={pending}
+              style={{
+                width: "100%",
+                background: "var(--panel-raised)",
+                border: "1px solid var(--line)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                fontSize: 13,
+                color: "var(--text)",
+                fontFamily: "var(--font-body)",
+                marginBottom: 20,
+              }}
+            >
+              <option value="read">Read — view dashboard &amp; reports</option>
+              <option value="curate">Curate — read + exclude/delete articles</option>
+              <option value="admin">Admin — full control, incl. this panel</option>
+            </select>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setInviteOpen(false)}
+                disabled={pending}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-sm btn-primary" disabled={pending}>
+                {pending ? "Sending…" : "Send invite"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </>
   );
 }
