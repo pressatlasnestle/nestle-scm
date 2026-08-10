@@ -230,6 +230,47 @@ export type Database = {
           },
         ]
       }
+      integration_secrets: {
+        Row: {
+          id: string
+          is_set: boolean
+          last_four: string | null
+          model_id: string | null
+          provider: string
+          updated_at: string | null
+          updated_by: string | null
+          vault_secret_id: string | null
+        }
+        Insert: {
+          id?: string
+          is_set?: boolean
+          last_four?: string | null
+          model_id?: string | null
+          provider: string
+          updated_at?: string | null
+          updated_by?: string | null
+          vault_secret_id?: string | null
+        }
+        Update: {
+          id?: string
+          is_set?: boolean
+          last_four?: string | null
+          model_id?: string | null
+          provider?: string
+          updated_at?: string | null
+          updated_by?: string | null
+          vault_secret_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integration_secrets_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       keywords: {
         Row: {
           added_by: string | null
@@ -437,13 +478,51 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      integration_secrets_status: {
+        Row: {
+          is_set: boolean | null
+          last_four: string | null
+          model_id: string | null
+          provider: string | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          is_set?: boolean | null
+          last_four?: string | null
+          model_id?: string | null
+          provider?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          is_set?: boolean | null
+          last_four?: string | null
+          model_id?: string | null
+          provider?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integration_secrets_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       can_curate: { Args: never; Returns: boolean }
       current_app_role: { Args: never; Returns: string }
       is_admin: { Args: never; Returns: boolean }
       is_app_user: { Args: never; Returns: boolean }
+      set_integration_secret: {
+        Args: { p_provider: string; p_secret_value: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
