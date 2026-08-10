@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCM Media Monitor — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A121F;
+    --panel:#111B2E;
+    --panel-raised:#16233A;
+    --line:#223252;
+    --line-soft:#1A2740;
+    --text:#E7EDF6;
+    --text-muted:#8494AF;
+    --text-dim:#5B6C89;
+    --teal:#2FD9C7;
+    --teal-dim:#173B3A;
+    --amber:#F0AE4E;
+    --amber-dim:#3A2E15;
+    --coral:#F0705F;
+    --coral-dim:#3A1D1A;
+    --indigo:#7C93F0;
+    --radius:10px;
+    --font-display:'Space Grotesk', sans-serif;
+    --font-body:'Inter', sans-serif;
+    --font-mono:'IBM Plex Mono', monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--font-body);
+    font-size:14px;
+    line-height:1.5;
+    display:flex;
+    min-height:100vh;
+  }
+  /* faint chart-grid texture on the page background */
+  body::before{
+    content:"";
+    position:fixed; inset:0;
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 42px 42px;
+    opacity:0.35;
+    pointer-events:none;
+    z-index:0;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    width:232px;
+    flex-shrink:0;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    position:relative;
+    z-index:1;
+    display:flex;
+    flex-direction:column;
+    padding:22px 14px;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:0 8px 22px;
+    margin-bottom:18px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand-mark{
+    width:30px; height:30px;
+    border-radius:8px;
+    background:linear-gradient(135deg, var(--teal), var(--indigo));
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-weight:500; font-size:13px;
+    color:#0A121F;
+  }
+  .brand-text{ font-family:var(--font-display); font-weight:600; font-size:14.5px; letter-spacing:0.2px; }
+  .brand-sub{ font-family:var(--font-mono); font-size:10px; color:var(--text-dim); letter-spacing:0.5px; text-transform:uppercase; margin-top:1px;}
+
+  .nav-label{
+    font-family:var(--font-mono);
+    font-size:10px;
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    padding:0 10px;
+    margin:14px 0 8px;
+  }
+  .nav-item{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:9px 10px;
+    border-radius:8px;
+    color:var(--text-muted);
+    font-size:13.5px;
+    font-weight:500;
+    cursor:pointer;
+    border:1px solid transparent;
+    transition:background 0.12s ease, color 0.12s ease;
+  }
+  .nav-item .dot{ width:5px; height:5px; border-radius:50%; background:var(--text-dim); flex-shrink:0; }
+  .nav-item:hover{ background:var(--panel-raised); color:var(--text); }
+  .nav-item.active{
+    background:var(--teal-dim);
+    color:var(--teal);
+    border-color:rgba(47,217,199,0.25);
+  }
+  .nav-item.active .dot{ background:var(--teal); box-shadow:0 0 0 3px rgba(47,217,199,0.18); }
+
+  .sidebar-foot{
+    margin-top:auto;
+    padding:12px 10px 4px;
+    border-top:1px solid var(--line);
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    color:var(--text-dim);
+    line-height:1.6;
+  }
+  .sidebar-foot b{ color:var(--text-muted); }
+
+  /* ---------- Main ---------- */
+  .main{ flex:1; position:relative; z-index:1; min-width:0; }
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:18px 30px;
+    border-bottom:1px solid var(--line);
+    background:rgba(17,27,46,0.6);
+    backdrop-filter:blur(6px);
+  }
+  .topbar-title{ font-family:var(--font-display); font-size:19px; font-weight:600; }
+  .topbar-sub{ font-size:12.5px; color:var(--text-muted); margin-top:2px; }
+  .topbar-right{ display:flex; align-items:center; gap:14px; }
+  .status-chip{
+    display:flex; align-items:center; gap:7px;
+    padding:6px 12px;
+    border-radius:20px;
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    font-family:var(--font-mono);
+    font-size:11.5px;
+    color:var(--text-muted);
+  }
+  .status-chip .pulse{
+    width:7px; height:7px; border-radius:50%;
+    background:var(--teal);
+    box-shadow:0 0 0 0 rgba(47,217,199,0.5);
+    animation:pulse 2s infinite;
+  }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(47,217,199,0.45); }
+    70%{ box-shadow:0 0 0 6px rgba(47,217,199,0); }
+    100%{ box-shadow:0 0 0 0 rgba(47,217,199,0); }
+  }
+  .avatar{
+    width:32px; height:32px; border-radius:8px;
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-size:12px; color:var(--text-muted);
+  }
+
+  .content{ padding:26px 30px 60px; max-width:1180px; }
+  .panel{ display:none; animation:fade 0.15s ease; }
+  .panel.active{ display:block; }
+  @keyframes fade{ from{opacity:0; transform:translateY(2px);} to{opacity:1; transform:none;} }
+
+  .panel-head{ display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:20px; gap:20px; }
+  .panel-head h1{ font-family:var(--font-display); font-size:21px; font-weight:600; margin-bottom:4px; }
+  .panel-head p{ font-size:13px; color:var(--text-muted); max-width:520px; }
+
+  .btn{
+    font-family:var(--font-body);
+    font-weight:600;
+    font-size:13px;
+    padding:9px 16px;
+    border-radius:8px;
+    border:1px solid var(--line);
+    background:var(--panel-raised);
+    color:var(--text);
+    cursor:pointer;
+    white-space:nowrap;
+    transition:border-color 0.12s ease, background 0.12s ease;
+  }
+  .btn:hover{ border-color:#33456b; }
+  .btn-primary{
+    background:var(--teal);
+    color:#07211E;
+    border-color:var(--teal);
+  }
+  .btn-primary:hover{ background:#3ee6d3; }
+  .btn-sm{ padding:6px 11px; font-size:12px; border-radius:6px; }
+  .btn-ghost{ background:transparent; }
+
+  /* ---------- Universe mode card ---------- */
+  .mode-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:18px 20px;
+    margin-bottom:22px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:24px;
+  }
+  .mode-card-left .eyebrow{
+    font-family:var(--font-mono); font-size:10.5px; letter-spacing:1px;
+    text-transform:uppercase; color:var(--indigo); margin-bottom:6px;
+  }
+  .mode-card-left h3{ font-family:var(--font-display); font-size:16px; font-weight:600; margin-bottom:4px; }
+  .mode-card-left p{ font-size:12.5px; color:var(--text-muted); max-width:440px; }
+
+  .toggle-group{ display:flex; background:var(--panel-raised); border:1px solid var(--line); border-radius:9px; padding:3px; flex-shrink:0; }
+  .toggle-opt{
+    padding:9px 15px;
+    border-radius:6px;
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--text-muted);
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .toggle-opt.selected{ background:var(--teal); color:#07211E; }
+
+  /* ---------- Table shell ---------- */
+  .table-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    overflow:hidden;
+  }
+  .table-toolbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 18px;
+    border-bottom:1px solid var(--line);
+    gap:14px;
+  }
+  .search-input{
+    flex:1; max-width:280px;
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    border-radius:7px;
+    padding:8px 12px;
+    font-size:12.5px;
+    color:var(--text);
+    font-family:var(--font-mono);
+  }
+  .search-input::placeholder{ color:var(--text-dim); }
+
+  table{ width:100%; border-collapse:collapse; }
+  th{
+    text-align:left;
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    letter-spacing:0.6px;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    font-weight:500;
+    padding:11px 18px;
+    border-bottom:1px solid var(--line);
+    background:rgba(255,255,255,0.015);
+  }
+  td{
+    padding:13px 18px;
+    border-bottom:1px solid var(--line-soft);
+    font-size:13px;
+    vertical-align:middle;
+  }
+  tr:last-child td{ border-bottom:none; }
+  tr.tbody-row:hover td{ background:rgba(255,255,255,0.014); }
+
+  .name-cell{ display:flex; align-items:center; gap:10px; }
+  .src-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .src-dot.ok{ background:var(--teal); box-shadow:0 0 0 3px rgba(47,217,199,0.15); }
+  .src-dot.warn{ background:var(--amber); box-shadow:0 0 0 3px rgba(240,174,78,0.15); }
+  .src-dot.err{ background:var(--coral); box-shadow:0 0 0 3px rgba(240,112,95,0.15); }
+  .src-name{ font-weight:600; }
+  .src-domain{ font-family:var(--font-mono); font-size:11px; color:var(--text-dim); margin-top:1px; }
+
+  .badge{
+    display:inline-flex; align-items:center;
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    letter-spacing:0.3px;
+    padding:3px 9px;
+    border-radius:5px;
+    font-weight:500;
+  }
+  .badge-positive{ background:var(--teal-dim); color:var(--teal); }
+  .badge-negative{ background:var(--coral-dim); color:var(--coral); }
+  .badge-neutral{ background:var(--panel-raised); color:var(--text-muted); border:1px solid var(--line); }
+  .badge-admin{ background:rgba(124,147,240,0.15); color:var(--indigo); }
+  .badge-curate{ background:var(--teal-dim); color:var(--teal); }
+  .badge-read{ background:var(--panel-raised); color:var(--text-muted); border:1px solid var(--line); }
+
+  .mono-dim{ font-family:var(--font-mono); font-size:12px; color:var(--text-dim); }
+  .cell-sub{ font-size:11.5px; color:var(--text-dim); margin-top:2px; }
+
+  .switch{ width:34px; height:19px; border-radius:20px; background:var(--panel-raised); border:1px solid var(--line); position:relative; cursor:pointer; flex-shrink:0; }
+  .switch::after{ content:""; position:absolute; width:13px; height:13px; border-radius:50%; background:var(--text-dim); top:2px; left:2px; transition:all .15s ease; }
+  .switch.on{ background:var(--teal-dim); border-color:rgba(47,217,199,0.4); }
+  .switch.on::after{ left:17px; background:var(--teal); }
+
+  .row-actions{ display:flex; gap:6px; justify-content:flex-end; }
+  .icon-btn{
+    width:28px; height:28px; border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    background:transparent; border:1px solid transparent; color:var(--text-dim);
+    cursor:pointer; font-size:14px;
+  }
+  .icon-btn:hover{ background:var(--panel-raised); border-color:var(--line); color:var(--text-muted); }
+  .row-delete{
+    display:flex; align-items:center; gap:5px;
+    padding:5px 10px; border-radius:6px;
+    background:transparent; border:1px solid transparent;
+    color:var(--text-dim); font-family:var(--font-body); font-size:11.5px; font-weight:600;
+    cursor:pointer; white-space:nowrap;
+    transition:all .12s ease;
+  }
+  .row-delete:hover{ background:var(--coral-dim); border-color:rgba(240,112,95,0.35); color:var(--coral); }
+  .row-fading{ opacity:0.32; pointer-events:none; transition:opacity .2s ease; }
+
+  /* ---------- Integrations ---------- */
+  .integration-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:14px; }
+  .integration-card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px;
+  }
+  .integration-card-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .provider-name{ font-family:var(--font-display); font-weight:600; font-size:15px; }
+  .provider-role{ font-size:11.5px; color:var(--text-dim); margin-top:2px; }
+  .key-state{ display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--panel-raised); border-radius:7px; margin-bottom:14px; }
+  .key-state .src-dot{ margin-right:0; }
+  .key-state-text{ font-family:var(--font-mono); font-size:12px; }
+  .key-state-text .muted{ color:var(--text-dim); }
+  .integration-meta{ font-size:11.5px; color:var(--text-dim); margin-bottom:14px; }
+  .model-row{ display:flex; align-items:center; gap:8px; margin-bottom:14px; }
+  .model-label{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); letter-spacing:0.4px; text-transform:uppercase; flex-shrink:0; width:44px; }
+  .model-input{
+    flex:1; background:var(--panel-raised); border:1px solid var(--line); border-radius:6px;
+    padding:7px 10px; font-size:12px; font-family:var(--font-mono); color:var(--text);
+  }
+  .integration-actions{ display:flex; gap:8px; }
+
+  /* ---------- Audit log ---------- */
+  .audit-action{ font-family:var(--font-mono); font-size:12px; }
+  .audit-action .verb{ color:var(--indigo); }
+
+  /* ---------- Add form inline ---------- */
+  .add-form{
+    display:flex; gap:10px; padding:16px 18px; border-bottom:1px solid var(--line);
+    background:rgba(255,255,255,0.012); flex-wrap:wrap; align-items:center;
+  }
+  .add-form input, .add-form select{
+    background:var(--panel-raised); border:1px solid var(--line); border-radius:7px;
+    padding:8px 11px; font-size:12.5px; color:var(--text); font-family:var(--font-body);
+  }
+  .add-form input::placeholder{ color:var(--text-dim); }
+
+  .panel-foot-note{
+    margin-top:14px; font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:7px;
+  }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">SM</div>
+    <div>
+      <div class="brand-text">SCM Media Monitor</div>
+      <div class="brand-sub">Admin console</div>
+    </div>
+  </div>
+
+  <div class="nav-label">Workspace</div>
+  <div class="nav-item"><span class="dot"></span> Articles</div>
+  <div class="nav-item"><span class="dot"></span> Analysis</div>
+
+  <div class="nav-label">Settings</div>
+  <div class="nav-item active" data-panel="universe"><span class="dot"></span> Media Universe</div>
+  <div class="nav-item" data-panel="keywords"><span class="dot"></span> Keywords</div>
+  <div class="nav-item" data-panel="users"><span class="dot"></span> Users &amp; Roles</div>
+  <div class="nav-item" data-panel="integrations"><span class="dot"></span> Integrations</div>
+  <div class="nav-item" data-panel="recipients"><span class="dot"></span> Recipients</div>
+  <div class="nav-item" data-panel="audit"><span class="dot"></span> Audit Log</div>
+
+  <div class="sidebar-foot">
+    <div><b>Project</b> · nestle-scm</div>
+    <div><b>DB</b> · SCM (ap-south-1)</div>
+    <div><b>Mode</b> · pro bono / test</div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title" id="pageTitle">Media Universe</div>
+      <div class="topbar-sub" id="pageSub">Sources the ingestion pipeline reads from, and how the universe is scoped.</div>
+    </div>
+    <div class="topbar-right">
+      <div class="status-chip"><span class="pulse"></span> Last pull: 2h ago · 14 new</div>
+      <div class="avatar">AT</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ===================== MEDIA UNIVERSE ===================== -->
+    <section class="panel active" id="panel-universe">
+      <div class="mode-card">
+        <div class="mode-card-left">
+          <div class="eyebrow">Universe mode</div>
+          <h3>Whole Universe</h3>
+          <p>Every source is pulled except those tagged Negative. Positive-tagged sources are always included regardless of mode.</p>
+        </div>
+        <div class="toggle-group">
+          <div class="toggle-opt selected">Whole Universe</div>
+          <div class="toggle-opt">Positive Only</div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="add-form">
+          <input type="text" placeholder="Source name" style="width:160px">
+          <input type="text" placeholder="RSS feed URL" style="width:260px">
+          <select><option>Neutral</option><option>Positive</option><option>Negative</option></select>
+          <input type="text" placeholder="Category (optional)" style="width:150px">
+          <button class="btn btn-primary btn-sm">Add source</button>
+        </div>
+        <div class="table-toolbar">
+          <input class="search-input" placeholder="Filter sources…">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <span class="cell-sub">23 sources · 21 active</span>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Source</th><th>List</th><th>Category</th><th>Health</th><th>Active</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot ok"></span><div><div class="src-name">TradeWinds</div><div class="src-domain">tradewindsnews.com/rss</div></div></td>
+              <td><span class="badge badge-positive">Positive</span></td>
+              <td class="mono-dim">Shipping trade press</td>
+              <td><div class="mono-dim">OK · 41m ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from TradeWinds. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot ok"></span><div><div class="src-name">Lloyd's List</div><div class="src-domain">lloydslist.com/rss</div></div></td>
+              <td><span class="badge badge-positive">Positive</span></td>
+              <td class="mono-dim">Shipping trade press</td>
+              <td><div class="mono-dim">OK · 1h ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from Lloyd's List. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot warn"></span><div><div class="src-name">Splash247</div><div class="src-domain">splash247.com/feed</div></div></td>
+              <td><span class="badge badge-neutral">Neutral</span></td>
+              <td class="mono-dim">Shipping trade press</td>
+              <td><div class="mono-dim" style="color:var(--amber)">No new items · 18h ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from Splash247. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot ok"></span><div><div class="src-name">Reuters — Shipping</div><div class="src-domain">reuters.com/business/shipping</div></div></td>
+              <td><span class="badge badge-neutral">Neutral</span></td>
+              <td class="mono-dim">Wire / general</td>
+              <td><div class="mono-dim">OK · 12m ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from Reuters — Shipping. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot err"></span><div><div class="src-name">gCaptain</div><div class="src-domain">gcaptain.com/feed</div></div></td>
+              <td><span class="badge badge-neutral">Neutral</span></td>
+              <td class="mono-dim">Maritime news</td>
+              <td><div class="mono-dim" style="color:var(--coral)">Fetch failed · 6h ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from gCaptain. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td class="name-cell"><span class="src-dot ok"></span><div><div class="src-name">Tabloid Freight Daily</div><div class="src-domain">tabloidfreight.example/rss</div></div></td>
+              <td><span class="badge badge-negative">Negative</span></td>
+              <td class="mono-dim">Low-quality aggregator</td>
+              <td><div class="mono-dim">OK · 2h ago</div></td>
+              <td><div class="switch on"></div></td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span><span class="row-delete" data-note="Stops future pulls from Tabloid Freight Daily. Already-ingested articles stay, tagged “source removed.”">Delete</span></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-foot-note">Negative sources are always excluded, in both universe modes. Deleting a source is permanent — it stops future pulls and cannot be undone, though prior articles from it are kept.</div>
+    </section>
+
+    <!-- ===================== KEYWORDS ===================== -->
+    <section class="panel" id="panel-keywords">
+      <div class="panel-head">
+        <div><h1>Keywords</h1><p>Articles are matched against this list during ingestion. Inactive keywords are kept for history but no longer used in matching.</p></div>
+      </div>
+      <div class="table-card">
+        <div class="add-form">
+          <input type="text" placeholder="Add a keyword…" style="width:240px">
+          <button class="btn btn-primary btn-sm">Add</button>
+        </div>
+        <table>
+          <thead><tr><th>Keyword</th><th>Added by</th><th>Added</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            <tr class="tbody-row"><td><b>ocean freight</b></td><td class="mono-dim">arunav@wishreiki.com</td><td class="mono-dim">Aug 9, 2026</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="row-delete" data-note="Stops matching “ocean freight” on future pulls. Articles already tagged with it keep that tag.">Delete</span></div></td></tr>
+            <tr class="tbody-row"><td><b>Suez Canal</b></td><td class="mono-dim">arunav@wishreiki.com</td><td class="mono-dim">Aug 9, 2026</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="row-delete" data-note="Stops matching “Suez Canal” on future pulls. Articles already tagged with it keep that tag.">Delete</span></div></td></tr>
+            <tr class="tbody-row"><td><b>port congestion</b></td><td class="mono-dim">arunav@wishreiki.com</td><td class="mono-dim">Aug 9, 2026</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="row-delete" data-note="Stops matching “port congestion” on future pulls. Articles already tagged with it keep that tag.">Delete</span></div></td></tr>
+            <tr class="tbody-row"><td><b>schedule reliability</b></td><td class="mono-dim">m.talukdar@nestle.com</td><td class="mono-dim">Aug 9, 2026</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="row-delete" data-note="Stops matching “schedule reliability” on future pulls. Articles already tagged with it keep that tag.">Delete</span></div></td></tr>
+            <tr class="tbody-row"><td style="color:var(--text-dim)"><b>Panama Canal drought</b></td><td class="mono-dim">m.talukdar@nestle.com</td><td class="mono-dim">Aug 9, 2026</td><td><div class="switch"></div></td><td><div class="row-actions"><span class="row-delete" data-note="Stops matching “Panama Canal drought” on future pulls. Articles already tagged with it keep that tag.">Delete</span></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== USERS & ROLES ===================== -->
+    <section class="panel" id="panel-users">
+      <div class="panel-head">
+        <div><h1>Users &amp; Roles</h1><p>Read can view everything. Curate can additionally exclude or delete articles. Admin has full control, including this panel.</p></div>
+        <button class="btn btn-primary">+ Invite user</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead>
+          <tbody>
+            <tr class="tbody-row">
+              <td><div><b>Arunav Talukdar</b></div><div class="cell-sub">arunav@wishreiki.com</div></td>
+              <td><span class="badge badge-admin">Admin</span></td>
+              <td><span class="mono-dim" style="color:var(--teal)">Active</span></td>
+              <td class="mono-dim">Aug 9, 2026</td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td><div><b>Monmi Bharali Talukdar</b></div><div class="cell-sub">monmi.talukdar@in.nestle.com</div></td>
+              <td><span class="badge badge-curate">Curate</span></td>
+              <td><span class="mono-dim" style="color:var(--teal)">Active</span></td>
+              <td class="mono-dim">Aug 9, 2026</td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td><div><b>Will Mackereth</b></div><div class="cell-sub">will.mackereth@nestle.com</div></td>
+              <td><span class="badge badge-read">Read</span></td>
+              <td><span class="mono-dim" style="color:var(--teal)">Active</span></td>
+              <td class="mono-dim">Aug 10, 2026</td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span></div></td>
+            </tr>
+            <tr class="tbody-row">
+              <td><div><b>Sameer C P</b></div><div class="cell-sub">sameer.cp@ae.nestle.com</div></td>
+              <td><span class="badge badge-read">Read</span></td>
+              <td><span class="mono-dim" style="color:var(--text-dim)">Invited</span></td>
+              <td class="mono-dim">—</td>
+              <td><div class="row-actions"><span class="icon-btn">✎</span></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== INTEGRATIONS ===================== -->
+    <section class="panel" id="panel-integrations">
+      <div class="panel-head">
+        <div><h1>Integrations</h1><p>API keys are stored encrypted in Supabase Vault. Values are never shown once saved — only masked status.</p></div>
+      </div>
+      <div class="integration-grid">
+        <div class="integration-card">
+          <div class="integration-card-head">
+            <div><div class="provider-name">Gemini</div><div class="provider-role">Article analysis &amp; summarization</div></div>
+          </div>
+          <div class="key-state"><span class="src-dot err"></span><div class="key-state-text"><span class="muted">Status —</span> Not configured</div></div>
+          <div class="model-row">
+            <span class="model-label">Model</span>
+            <input type="text" class="model-input" value="gemini-2.5-flash" placeholder="model id">
+          </div>
+          <div class="integration-meta">No key has been set for this provider yet. Model can be set independently of the key.</div>
+          <div class="integration-actions">
+            <button class="btn btn-primary btn-sm">Set key</button>
+            <button class="btn btn-sm">Save model</button>
+          </div>
+        </div>
+        <div class="integration-card">
+          <div class="integration-card-head">
+            <div><div class="provider-name">Claude</div><div class="provider-role">Report narrative generation</div></div>
+          </div>
+          <div class="key-state"><span class="src-dot ok"></span><div class="key-state-text">Key set <span class="muted">· ends in</span> 8f21</div></div>
+          <div class="model-row">
+            <span class="model-label">Model</span>
+            <input type="text" class="model-input" value="claude-haiku-4-5" placeholder="model id">
+          </div>
+          <div class="integration-meta">Last updated by arunav@wishreiki.com · Aug 9, 2026</div>
+          <div class="integration-actions">
+            <button class="btn btn-sm">Replace key</button>
+            <button class="btn btn-sm">Save model</button>
+          </div>
+        </div>
+        <div class="integration-card">
+          <div class="integration-card-head">
+            <div><div class="provider-name">News Aggregator</div><div class="provider-role">Whole-universe keyword search, beyond listed RSS sources</div></div>
+          </div>
+          <div class="key-state"><span class="src-dot err"></span><div class="key-state-text"><span class="muted">Status —</span> Not configured</div></div>
+          <div class="integration-meta">Google News / RSS search API key. No key has been set for this provider yet.</div>
+          <button class="btn btn-primary btn-sm">Set key</button>
+        </div>
+        <div class="integration-card">
+          <div class="integration-card-head">
+            <div><div class="provider-name">Resend</div><div class="provider-role">Monday digest delivery</div></div>
+          </div>
+          <div class="key-state"><span class="src-dot ok"></span><div class="key-state-text">Key set <span class="muted">· ends in</span> a13c</div></div>
+          <div class="integration-meta">Last updated by arunav@wishreiki.com · Aug 9, 2026</div>
+          <button class="btn btn-sm">Replace key</button>
+        </div>
+      </div>
+      <div class="panel-foot-note">Model IDs are plain config, not secrets — changing one takes effect on the next run, no redeploy needed.</div>
+    </section>
+
+    <!-- ===================== RECIPIENTS ===================== -->
+    <section class="panel" id="panel-recipients">
+      <div class="panel-head">
+        <div><h1>Recipients</h1><p>Who receives the Monday digest email. Separate from dashboard login access.</p></div>
+      </div>
+      <div class="table-card">
+        <div class="add-form">
+          <input type="text" placeholder="Name" style="width:160px">
+          <input type="text" placeholder="Email address" style="width:220px">
+          <button class="btn btn-primary btn-sm">Add recipient</button>
+        </div>
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            <tr class="tbody-row"><td><b>Will Mackereth</b></td><td class="mono-dim">will.mackereth@nestle.com</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="icon-btn">✕</span></div></td></tr>
+            <tr class="tbody-row"><td><b>Monmi Bharali Talukdar</b></td><td class="mono-dim">monmi.talukdar@in.nestle.com</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="icon-btn">✕</span></div></td></tr>
+            <tr class="tbody-row"><td><b>Ocean Hub Desk (ZAOA)</b></td><td class="mono-dim">oceanhub.zaoa@nestle.com</td><td><div class="switch on"></div></td><td><div class="row-actions"><span class="icon-btn">✕</span></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== AUDIT LOG ===================== -->
+    <section class="panel" id="panel-audit">
+      <div class="panel-head">
+        <div><h1>Audit Log</h1><p>Every curate/admin action, permanently recorded. Read-only, admin visibility only.</p></div>
+      </div>
+      <div class="table-card">
+        <div class="table-toolbar">
+          <input class="search-input" placeholder="Filter by actor or action…">
+        </div>
+        <table>
+          <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
+          <tbody>
+            <tr class="tbody-row"><td class="mono-dim">10:42:03</td><td>arunav@wishreiki.com</td><td class="audit-action"><span class="verb">integration_secret.update</span></td><td class="mono-dim">provider: claude</td></tr>
+            <tr class="tbody-row"><td class="mono-dim">10:41:10</td><td>arunav@wishreiki.com</td><td class="audit-action"><span class="verb">integration_secret.update</span></td><td class="mono-dim">provider: resend</td></tr>
+            <tr class="tbody-row"><td class="mono-dim">09:15:44</td><td>monmi.talukdar@in.nestle.com</td><td class="audit-action"><span class="verb">article.exclude</span></td><td class="mono-dim">art_7f2a1c…</td></tr>
+            <tr class="tbody-row"><td class="mono-dim">08:03:29</td><td>arunav@wishreiki.com</td><td class="audit-action"><span class="verb">source.add</span></td><td class="mono-dim">Tabloid Freight Daily</td></tr>
+            <tr class="tbody-row"><td class="mono-dim">Aug 9, 17:20</td><td>arunav@wishreiki.com</td><td class="audit-action"><span class="verb">keyword.add</span></td><td class="mono-dim">"schedule reliability"</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+  const titles = {
+    universe: ["Media Universe","Sources the ingestion pipeline reads from, and how the universe is scoped."],
+    keywords: ["Keywords","Terms matched against every article during ingestion."],
+    users: ["Users & Roles","Who can access the dashboard, and what they're allowed to do."],
+    integrations: ["Integrations","API keys for analysis and delivery — stored encrypted, never displayed."],
+    recipients: ["Recipients","The Monday digest distribution list."],
+    audit: ["Audit Log","Every curate/admin action, permanently recorded."]
+  };
+  document.querySelectorAll('.nav-item[data-panel]').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item[data-panel]').forEach(i => i.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      item.classList.add('active');
+      const key = item.dataset.panel;
+      document.getElementById('panel-' + key).classList.add('active');
+      document.getElementById('pageTitle').textContent = titles[key][0];
+      document.getElementById('pageSub').textContent = titles[key][1];
+    });
+  });
+  document.querySelectorAll('.toggle-opt').forEach(opt => {
+    opt.addEventListener('click', () => {
+      opt.parentElement.querySelectorAll('.toggle-opt').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+    });
+  });
+  document.querySelectorAll('.switch').forEach(sw => {
+    sw.addEventListener('click', () => sw.classList.toggle('on'));
+  });
+  document.querySelectorAll('.row-delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('tr');
+      const name = row.querySelector('.src-name, td b')?.textContent || 'this item';
+      const note = btn.dataset.note || '';
+      if (confirm(`Delete ${name}?\n\n${note}`)) {
+        row.classList.add('row-fading');
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
