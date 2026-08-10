@@ -6,17 +6,23 @@ import { getSessionContext } from "@/lib/auth";
 import { toActionError, type ActionResult } from "@/lib/actions/result";
 
 const PATH = "/keywords";
+export type KeywordListType = "positive" | "negative";
 
-export async function addKeyword(keyword: string): Promise<ActionResult> {
-  const value = keyword.trim();
+export async function addKeyword(input: {
+  keyword: string;
+  listType: KeywordListType;
+}): Promise<ActionResult> {
+  const value = input.keyword.trim();
   if (!value) return { ok: false, error: "Enter a keyword." };
+  const listType: KeywordListType =
+    input.listType === "negative" ? "negative" : "positive";
 
   const { userId } = await getSessionContext();
   const supabase = await createClient();
 
   const { error } = await supabase
     .from("keywords")
-    .insert({ keyword: value, added_by: userId });
+    .insert({ keyword: value, list_type: listType, added_by: userId });
 
   if (error) {
     if ((error as { code?: string }).code === "23505") {

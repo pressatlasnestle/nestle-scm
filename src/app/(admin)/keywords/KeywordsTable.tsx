@@ -4,11 +4,17 @@ import { useState, useTransition } from "react";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { shortDate } from "@/lib/format";
-import { addKeyword, deleteKeyword, setKeywordActive } from "./actions";
+import {
+  addKeyword,
+  deleteKeyword,
+  setKeywordActive,
+  type KeywordListType,
+} from "./actions";
 
 export type KeywordRow = {
   id: string;
   keyword: string;
+  list_type: KeywordListType;
   is_active: boolean;
   created_at: string;
   added_by_email: string | null;
@@ -24,6 +30,7 @@ export function KeywordsTable({
   const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [value, setValue] = useState("");
+  const [listType, setListType] = useState<KeywordListType>("positive");
   const [toDelete, setToDelete] = useState<KeywordRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -37,10 +44,11 @@ export function KeywordsTable({
     }
     const kw = value.trim();
     startTransition(async () => {
-      const res = await addKeyword(kw);
+      const res = await addKeyword({ keyword: kw, listType });
       if (res.ok) {
-        toast.success(`Added “${kw}”.`);
+        toast.success(`Added “${kw}” (${listType}).`);
         setValue("");
+        setListType("positive");
       } else {
         toast.error(res.error);
       }
@@ -91,6 +99,14 @@ export function KeywordsTable({
               value={value}
               onChange={(e) => setValue(e.target.value)}
             />
+            <select
+              value={listType}
+              onChange={(e) => setListType(e.target.value as KeywordListType)}
+              aria-label="Keyword type"
+            >
+              <option value="positive">Positive</option>
+              <option value="negative">Negative</option>
+            </select>
             <button className="btn btn-primary btn-sm" type="submit" disabled={pending}>
               {pending ? "Adding…" : "Add"}
             </button>
@@ -112,6 +128,7 @@ export function KeywordsTable({
               <thead>
                 <tr>
                   <th>Keyword</th>
+                  <th>Type</th>
                   <th>Added by</th>
                   <th>Added</th>
                   <th>Active</th>
@@ -125,6 +142,17 @@ export function KeywordsTable({
                     <tr key={k.id} className={busy ? "row-fading" : undefined}>
                       <td style={{ color: k.is_active ? undefined : "var(--text-dim)" }}>
                         <b>{k.keyword}</b>
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${
+                            k.list_type === "negative"
+                              ? "badge-negative"
+                              : "badge-positive"
+                          }`}
+                        >
+                          {k.list_type === "negative" ? "Negative" : "Positive"}
+                        </span>
                       </td>
                       <td className="mono-dim">{k.added_by_email ?? "—"}</td>
                       <td className="mono-dim">{shortDate(k.created_at)}</td>

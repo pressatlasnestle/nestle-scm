@@ -59,6 +59,7 @@ export type Database = {
           id: string
           ingested_at: string
           matched_keywords: string[]
+          matched_negative_keywords: string[] | null
           media: string | null
           published_at: string | null
           source_id: string | null
@@ -83,6 +84,7 @@ export type Database = {
           id?: string
           ingested_at?: string
           matched_keywords?: string[]
+          matched_negative_keywords?: string[] | null
           media?: string | null
           published_at?: string | null
           source_id?: string | null
@@ -107,6 +109,7 @@ export type Database = {
           id?: string
           ingested_at?: string
           matched_keywords?: string[]
+          matched_negative_keywords?: string[] | null
           media?: string | null
           published_at?: string | null
           source_id?: string | null
@@ -278,6 +281,7 @@ export type Database = {
           id: string
           is_active: boolean
           keyword: string
+          list_type: string
         }
         Insert: {
           added_by?: string | null
@@ -285,6 +289,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           keyword: string
+          list_type?: string
         }
         Update: {
           added_by?: string | null
@@ -292,6 +297,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           keyword?: string
+          list_type?: string
         }
         Relationships: [
           {
