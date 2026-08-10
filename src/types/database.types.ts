@@ -277,27 +277,36 @@ export type Database = {
       keywords: {
         Row: {
           added_by: string | null
+          cluster: string | null
           created_at: string
+          gate: string | null
           id: string
           is_active: boolean
           keyword: string
           list_type: string
+          match_type: string | null
         }
         Insert: {
           added_by?: string | null
+          cluster?: string | null
           created_at?: string
+          gate?: string | null
           id?: string
           is_active?: boolean
           keyword: string
           list_type?: string
+          match_type?: string | null
         }
         Update: {
           added_by?: string | null
+          cluster?: string | null
           created_at?: string
+          gate?: string | null
           id?: string
           is_active?: boolean
           keyword?: string
           list_type?: string
+          match_type?: string | null
         }
         Relationships: [
           {
@@ -433,7 +442,9 @@ export type Database = {
         Row: {
           added_by: string | null
           category: string | null
+          content_type: string | null
           created_at: string
+          handling_notes: string | null
           id: string
           is_active: boolean
           last_fetch_error: string | null
@@ -441,13 +452,18 @@ export type Database = {
           last_fetched_at: string | null
           list_type: string | null
           name: string
+          priority: string | null
+          region: string | null
           rss_url: string | null
+          tier: string | null
           website_domain: string | null
         }
         Insert: {
           added_by?: string | null
           category?: string | null
+          content_type?: string | null
           created_at?: string
+          handling_notes?: string | null
           id?: string
           is_active?: boolean
           last_fetch_error?: string | null
@@ -455,13 +471,18 @@ export type Database = {
           last_fetched_at?: string | null
           list_type?: string | null
           name: string
+          priority?: string | null
+          region?: string | null
           rss_url?: string | null
+          tier?: string | null
           website_domain?: string | null
         }
         Update: {
           added_by?: string | null
           category?: string | null
+          content_type?: string | null
           created_at?: string
+          handling_notes?: string | null
           id?: string
           is_active?: boolean
           last_fetch_error?: string | null
@@ -469,7 +490,10 @@ export type Database = {
           last_fetched_at?: string | null
           list_type?: string | null
           name?: string
+          priority?: string | null
+          region?: string | null
           rss_url?: string | null
+          tier?: string | null
           website_domain?: string | null
         }
         Relationships: [
