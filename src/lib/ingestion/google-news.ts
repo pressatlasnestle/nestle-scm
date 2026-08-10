@@ -8,16 +8,27 @@ import type { FeedItem, IngestionClient, KeywordRow } from "./types";
  * News rather than reading a named publisher's feed, to catch stories the
  * curated source list missed.
  *
- * Its value is breadth, not freshness: this feed skews old (external testing
- * puts the median item age at several days), so it contributes little to the
- * 24h scheduled runs and articles_new is expected to stay low. It is logged
- * like every other run so that is visible rather than surprising.
+ * Its value is breadth, not freshness — and measurement showed it is far less
+ * fresh than expected. Across the ten sweep queries, 457 items came back with a
+ * median age of 227 days: 3 within a week, 8 within a month, 195 older than a
+ * year. Of the 113 items that clear both gates, none were newer than 30 days.
+ * Google News returns relevance-ranked evergreen results for standing topical
+ * queries, not a recency feed.
+ *
+ * So this is a one-time seed, not a recurring job: the window is a year, and
+ * there is no cron for it (see migration 16). Trigger it manually via
+ * POST /api/ingestion/run with runType=google_news_sweep. Ingested items keep
+ * their true published_at, so anything reading a recent window filters them out
+ * naturally.
  */
 
 const GOOGLE_NEWS_BASE = "https://news.google.com/rss/search";
 
-/** Days of history the sweep considers. Wider than the 12h runs, per above. */
-const SWEEP_WINDOW_DAYS = 7;
+/**
+ * A year, because anything shorter captures nothing at all — see above. This
+ * is the seeding window, deliberately unlike every other run type's.
+ */
+const SWEEP_WINDOW_DAYS = 365;
 
 /**
  * Anchors OR-ed into every query. Google News treats adjacent terms as AND, so
