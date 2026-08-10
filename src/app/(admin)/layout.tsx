@@ -12,6 +12,7 @@ const ALL_ITEMS: (NavItem & { adminOnly: boolean })[] = [
   { label: "Users & Roles", href: "/users", adminOnly: true },
   { label: "Integrations", href: "/integrations", adminOnly: true },
   { label: "Recipients", href: "/recipients", adminOnly: false },
+  { label: "Newsletter", href: "/newsletter", adminOnly: false },
   { label: "Audit Log", href: "/audit-log", adminOnly: true },
 ];
 

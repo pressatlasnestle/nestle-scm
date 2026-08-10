@@ -22,6 +22,10 @@ const TITLES: Record<string, [string, string]> = {
     "API keys for analysis and delivery — stored encrypted, never displayed.",
   ],
   "/recipients": ["Recipients", "The Monday digest distribution list."],
+  "/newsletter": [
+    "Newsletter",
+    "Preview of the Monday digest, generated from the shared report template.",
+  ],
   "/audit-log": [
     "Audit Log",
     "Every curate/admin action, permanently recorded.",
