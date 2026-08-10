@@ -180,6 +180,7 @@ export type Database = {
           articles_found: number | null
           articles_new: number | null
           articles_skipped_paywall: number | null
+          articles_suppressed_exclusion: number | null
           completed_at: string | null
           errors: Json | null
           id: string
@@ -196,6 +197,7 @@ export type Database = {
           articles_found?: number | null
           articles_new?: number | null
           articles_skipped_paywall?: number | null
+          articles_suppressed_exclusion?: number | null
           completed_at?: string | null
           errors?: Json | null
           id?: string
@@ -212,6 +214,7 @@ export type Database = {
           articles_found?: number | null
           articles_new?: number | null
           articles_skipped_paywall?: number | null
+          articles_suppressed_exclusion?: number | null
           completed_at?: string | null
           errors?: Json | null
           id?: string
