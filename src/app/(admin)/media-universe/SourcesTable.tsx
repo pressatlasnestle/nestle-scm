@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import type { Tables } from "@/types/database.types";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
+import { PolarityFilter, type PolarityValue } from "@/components/PolarityFilter";
 import { relativeTime } from "@/lib/format";
 import {
   addSource,
@@ -52,6 +53,7 @@ export function SourcesTable({
 }) {
   const toast = useToast();
   const [filter, setFilter] = useState("");
+  const [polarity, setPolarity] = useState<PolarityValue>("all");
   const [pending, startTransition] = useTransition();
 
   // add-form state
@@ -67,15 +69,22 @@ export function SourcesTable({
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return sources;
-    return sources.filter((s) =>
-      [s.name, s.website_domain, s.rss_url, s.category]
-        .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(q))
-    );
-  }, [sources, filter]);
+    return sources.filter((s) => {
+      const matchesText = !q || s.name.toLowerCase().includes(q);
+      const matchesPolarity =
+        polarity === "all"
+          ? true
+          : polarity === "positive"
+            ? s.list_type === "positive"
+            : polarity === "negative"
+              ? s.list_type === "negative"
+              : // neutral = neither positive nor negative (list_type is null)
+                s.list_type !== "positive" && s.list_type !== "negative";
+      return matchesText && matchesPolarity;
+    });
+  }, [sources, filter, polarity]);
 
-  const activeCount = sources.filter((s) => s.is_active).length;
+  const filtering = filter.trim() !== "" || polarity !== "all";
 
   function submitAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -159,17 +168,28 @@ export function SourcesTable({
           </form>
         )}
 
-        <div className="table-toolbar">
+        <div className="table-toolbar" style={{ flexWrap: "wrap" }}>
           <input
             className="search-input"
-            placeholder="Filter sources…"
+            placeholder="Filter by name…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <PolarityFilter
+              value={polarity}
+              onChange={setPolarity}
+              options={[
+                { value: "all", label: "All" },
+                { value: "positive", label: "Positive" },
+                { value: "negative", label: "Negative" },
+                { value: "neutral", label: "Neutral" },
+              ]}
+            />
             <span className="cell-sub">
-              {sources.length} source{sources.length === 1 ? "" : "s"} ·{" "}
-              {activeCount} active
+              {filtering
+                ? `${filtered.length} of ${sources.length} sources`
+                : `${sources.length} source${sources.length === 1 ? "" : "s"}`}
             </span>
           </div>
         </div>
@@ -248,7 +268,7 @@ export function SourcesTable({
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={canEdit ? 6 : 5} className="mono-dim">
-                      No sources match “{filter}”.
+                      No sources match the current filter.
                     </td>
                   </tr>
                 )}

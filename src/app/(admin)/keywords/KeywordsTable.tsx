@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
+import { PolarityFilter, type PolarityValue } from "@/components/PolarityFilter";
 import { shortDate } from "@/lib/format";
 import {
   addKeyword,
@@ -31,10 +32,24 @@ export function KeywordsTable({
   const [pending, startTransition] = useTransition();
   const [value, setValue] = useState("");
   const [listType, setListType] = useState<KeywordListType>("positive");
+  const [filter, setFilter] = useState("");
+  const [polarity, setPolarity] = useState<PolarityValue>("all");
   const [toDelete, setToDelete] = useState<KeywordRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const keywords = initialKeywords;
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return keywords.filter((k) => {
+      const matchesText = !q || k.keyword.toLowerCase().includes(q);
+      const matchesPolarity =
+        polarity === "all" ? true : k.list_type === polarity;
+      return matchesText && matchesPolarity;
+    });
+  }, [keywords, filter, polarity]);
+
+  const filtering = filter.trim() !== "" || polarity !== "all";
 
   function submitAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -123,20 +138,45 @@ export function KeywordsTable({
             </div>
           </div>
         ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Keyword</th>
-                  <th>Type</th>
-                  <th>Added by</th>
-                  <th>Added</th>
-                  <th>Active</th>
-                  {canEdit && <th />}
-                </tr>
-              </thead>
-              <tbody>
-                {keywords.map((k) => {
+          <>
+            <div className="table-toolbar" style={{ flexWrap: "wrap" }}>
+              <input
+                className="search-input"
+                placeholder="Filter by keyword…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <PolarityFilter
+                  value={polarity}
+                  onChange={setPolarity}
+                  options={[
+                    { value: "all", label: "All" },
+                    { value: "positive", label: "Positive" },
+                    { value: "negative", label: "Negative" },
+                  ]}
+                />
+                <span className="cell-sub">
+                  {filtering
+                    ? `${filtered.length} of ${keywords.length} keywords`
+                    : `${keywords.length} keyword${keywords.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+            </div>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Keyword</th>
+                    <th>Type</th>
+                    <th>Added by</th>
+                    <th>Added</th>
+                    <th>Active</th>
+                    {canEdit && <th />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((k) => {
                   const busy = busyId === k.id && pending;
                   return (
                     <tr key={k.id} className={busy ? "row-fading" : undefined}>
@@ -181,9 +221,17 @@ export function KeywordsTable({
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={canEdit ? 6 : 5} className="mono-dim">
+                        No keywords match the current filter.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
