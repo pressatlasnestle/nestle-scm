@@ -1,5 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
+import {
+  STAGE_FALLBACK_MODEL,
+  STAGE_LABEL,
+  STAGE_SETTING_KEY,
+} from "@/lib/analysis/models";
 import { IntegrationCard, type ProviderStatus } from "./IntegrationCard";
 
 export const dynamic = "force-dynamic";
@@ -12,11 +17,12 @@ const PROVIDER_META: Omit<
   {
     provider: "gemini",
     name: "Gemini",
-    role: "Article analysis & summarization",
-    hasModel: true,
-    modelPlaceholder: "gemini-2.5-flash",
+    role: "Article sorting & coding",
+    // Gemini's model ids are per-stage and live in app_settings, not on the key
+    // record — filled in below, where the settings have been read.
+    hasModel: false,
     notConfiguredNote:
-      "No key has been set for this provider yet. The model is stored alongside the key.",
+      "No key has been set for this provider yet. Sorting and coding will fail until one is.",
   },
   {
     provider: "claude",
@@ -77,6 +83,17 @@ export default async function IntegrationsPage() {
 
   const byProvider = new Map(rows.map((r) => [r.provider, r]));
 
+  // Per-stage Gemini models live in app_settings, alongside universe_mode.
+  const { data: settingRows } = await supabase
+    .from("app_settings")
+    .select("key, value")
+    .in("key", [STAGE_SETTING_KEY.sorting, STAGE_SETTING_KEY.coding]);
+
+  const settingValue = (key: string, fallback: string) => {
+    const v = settingRows?.find((r) => r.key === key)?.value;
+    return typeof v === "string" && v.trim() ? v : fallback;
+  };
+
   const cards: ProviderStatus[] = PROVIDER_META.map((meta) => {
     const row = byProvider.get(meta.provider);
     return {
@@ -86,6 +103,32 @@ export default async function IntegrationsPage() {
       modelId: row?.model_id ?? null,
       updatedByEmail: row?.updated_by ? emailById.get(row.updated_by) ?? null : null,
       updatedAt: row?.updated_at ?? null,
+      ...(meta.provider === "gemini"
+        ? {
+            stageModels: [
+              {
+                settingKey: STAGE_SETTING_KEY.sorting,
+                label: STAGE_LABEL.sorting,
+                value: settingValue(
+                  STAGE_SETTING_KEY.sorting,
+                  STAGE_FALLBACK_MODEL.sorting
+                ),
+                placeholder: STAGE_FALLBACK_MODEL.sorting,
+                hint: "Runs automatically on every article an ingestion run captures — one call each. Keep this one cheap.",
+              },
+              {
+                settingKey: STAGE_SETTING_KEY.coding,
+                label: STAGE_LABEL.coding,
+                value: settingValue(
+                  STAGE_SETTING_KEY.coding,
+                  STAGE_FALLBACK_MODEL.coding
+                ),
+                placeholder: STAGE_FALLBACK_MODEL.coding,
+                hint: "Runs only when an analyst triggers AI Analysis on a reviewed batch. Can afford a stronger model.",
+              },
+            ],
+          }
+        : {}),
     };
   });
 
@@ -109,7 +152,9 @@ export default async function IntegrationsPage() {
 
       <div className="panel-foot-note">
         Model IDs are plain config, not secrets — changing one takes effect on
-        the next run, no redeploy needed.
+        the next run, no redeploy needed. Gemini&rsquo;s two models are read
+        fresh per call and are never cached, so a change here applies to the
+        very next sorting or coding run.
       </div>
     </>
   );

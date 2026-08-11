@@ -48,12 +48,17 @@ export type Database = {
           ai_category: string | null
           ai_relevance_score: number | null
           ai_sentiment: string | null
+          ai_sorting_flagged: boolean | null
+          ai_sorting_reasoning: string | null
+          ai_sorting_status: string | null
           ai_summary: string | null
           ai_tags: string[]
+          ai_themes: string[] | null
           alt_urls: string[]
           body: string | null
           body_purged_at: string | null
           byline: string | null
+          coded_status: string | null
           dedup_key: string
           headline: string
           id: string
@@ -75,12 +80,17 @@ export type Database = {
           ai_category?: string | null
           ai_relevance_score?: number | null
           ai_sentiment?: string | null
+          ai_sorting_flagged?: boolean | null
+          ai_sorting_reasoning?: string | null
+          ai_sorting_status?: string | null
           ai_summary?: string | null
           ai_tags?: string[]
+          ai_themes?: string[] | null
           alt_urls?: string[]
           body?: string | null
           body_purged_at?: string | null
           byline?: string | null
+          coded_status?: string | null
           dedup_key: string
           headline: string
           id?: string
@@ -102,12 +112,17 @@ export type Database = {
           ai_category?: string | null
           ai_relevance_score?: number | null
           ai_sentiment?: string | null
+          ai_sorting_flagged?: boolean | null
+          ai_sorting_reasoning?: string | null
+          ai_sorting_status?: string | null
           ai_summary?: string | null
           ai_tags?: string[]
+          ai_themes?: string[] | null
           alt_urls?: string[]
           body?: string | null
           body_purged_at?: string | null
           byline?: string | null
+          coded_status?: string | null
           dedup_key?: string
           headline?: string
           id?: string

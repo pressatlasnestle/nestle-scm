@@ -3,7 +3,23 @@
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/Toast";
 import { shortDate } from "@/lib/format";
-import { setIntegrationKey, saveIntegrationModel } from "./actions";
+import { setIntegrationKey, saveIntegrationModel, saveStageModels } from "./actions";
+
+/**
+ * A model id that is configured per pipeline stage rather than per provider,
+ * stored in app_settings instead of on the provider's key record. Gemini has
+ * two (sorting, coding); everything else still uses the single provider-level
+ * `hasModel` field.
+ */
+export type StageModel = {
+  /** app_settings key, e.g. 'sorting_model_id'. */
+  settingKey: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  /** One line explaining when this stage runs, so the cost tradeoff is visible. */
+  hint: string;
+};
 
 export type ProviderStatus = {
   provider: string;
@@ -19,6 +35,8 @@ export type ProviderStatus = {
   modelPlaceholder?: string;
   /** Copy shown under an unconfigured provider. */
   notConfiguredNote: string;
+  /** When present, replaces the single Model field with one field per stage. */
+  stageModels?: StageModel[];
 };
 
 export function IntegrationCard({ status }: { status: ProviderStatus }) {
@@ -28,6 +46,22 @@ export function IntegrationCard({ status }: { status: ProviderStatus }) {
   const [editingKey, setEditingKey] = useState(false);
   const [keyValue, setKeyValue] = useState("");
   const [model, setModel] = useState(status.modelId ?? "");
+  const [stageValues, setStageValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (status.stageModels ?? []).map((m) => [m.settingKey, m.value])
+    )
+  );
+
+  const stageModels = status.stageModels ?? [];
+  const hasStageModels = stageModels.length > 0;
+
+  function submitStageModels() {
+    startTransition(async () => {
+      const res = await saveStageModels(stageValues);
+      if (res.ok) toast.success(`${status.name} models updated.`);
+      else toast.error(res.error);
+    });
+  }
 
   function submitKey() {
     const value = keyValue;
@@ -79,19 +113,40 @@ export function IntegrationCard({ status }: { status: ProviderStatus }) {
         </div>
       </div>
 
-      {status.hasModel && (
-        <div className="model-row">
-          <span className="model-label">Model</span>
-          <input
-            type="text"
-            className="model-input"
-            value={model}
-            placeholder={status.modelPlaceholder ?? "model id"}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={pending}
-          />
-        </div>
-      )}
+      {hasStageModels
+        ? stageModels.map((m) => (
+            <div className="model-row" key={m.settingKey}>
+              <span className="model-label" title={m.hint}>
+                {m.label}
+              </span>
+              <input
+                type="text"
+                className="model-input"
+                value={stageValues[m.settingKey] ?? ""}
+                placeholder={m.placeholder}
+                onChange={(e) =>
+                  setStageValues((prev) => ({
+                    ...prev,
+                    [m.settingKey]: e.target.value,
+                  }))
+                }
+                disabled={pending}
+              />
+            </div>
+          ))
+        : status.hasModel && (
+            <div className="model-row">
+              <span className="model-label">Model</span>
+              <input
+                type="text"
+                className="model-input"
+                value={model}
+                placeholder={status.modelPlaceholder ?? "model id"}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+          )}
 
       <div className="integration-meta">
         {status.isSet
@@ -136,10 +191,20 @@ export function IntegrationCard({ status }: { status: ProviderStatus }) {
           >
             {status.isSet ? "Replace key" : "Set key"}
           </button>
-          {status.hasModel && (
-            <button className="btn btn-sm" onClick={submitModel} disabled={pending}>
-              Save model
+          {hasStageModels ? (
+            <button
+              className="btn btn-sm"
+              onClick={submitStageModels}
+              disabled={pending}
+            >
+              Save models
             </button>
+          ) : (
+            status.hasModel && (
+              <button className="btn btn-sm" onClick={submitModel} disabled={pending}>
+                Save model
+              </button>
+            )
           )}
         </div>
       )}
