@@ -3,6 +3,9 @@
 import { useEffect, useState, useTransition, type CSSProperties } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { shortDate } from "@/lib/format";
+import { useToast } from "@/components/Toast";
+import { ConfirmModal } from "@/components/ConfirmModal";
+import { excludeArticle, deleteArticle } from "./actions";
 
 const CHANNEL_OPTIONS: { value: string; label: string }[] = [
   { value: "all", label: "All" },
@@ -143,6 +146,12 @@ export function ArticlesView({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
+  const toast = useToast();
+
+  const [action, setAction] = useState<
+    { row: ArticleRow; kind: "exclude" | "delete" } | null
+  >(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (filters.page - 1) * pageSize + 1;
@@ -189,7 +198,26 @@ export function ArticlesView({
     filters.neg ||
     filters.status !== "active";
 
-  const colCount = 7;
+  function runAction() {
+    if (!action) return;
+    const { row, kind } = action;
+    setActionBusy(true);
+    startTransition(async () => {
+      const res =
+        kind === "exclude"
+          ? await excludeArticle(row.id)
+          : await deleteArticle(row.id);
+      setActionBusy(false);
+      setAction(null);
+      if (res.ok)
+        toast.success(
+          `Article ${kind === "exclude" ? "excluded" : "deleted"}.`
+        );
+      else toast.error(res.error);
+    });
+  }
+
+  const colCount = 7 + (canCurate ? 1 : 0);
 
   return (
     <>
@@ -287,6 +315,7 @@ export function ArticlesView({
                     Mentions{mentionsArrow}
                   </th>
                   <th>Words</th>
+                  {canCurate && <th />}
                 </tr>
               </thead>
               <tbody>
@@ -315,6 +344,31 @@ export function ArticlesView({
                     <td>{negFlag(a.matched_negative_keywords) ?? <span className="mono-dim">—</span>}</td>
                     <td className="mono-dim">{a.keyword_mention_count ?? "—"}</td>
                     <td className="mono-dim">{a.word_count ?? "—"}</td>
+                    {canCurate && (
+                      <td>
+                        <div className="row-actions">
+                          {a.status !== "excluded" && (
+                            <button
+                              type="button"
+                              className="row-delete"
+                              style={{ color: "var(--amber)" }}
+                              onClick={() => setAction({ row: a, kind: "exclude" })}
+                            >
+                              Exclude
+                            </button>
+                          )}
+                          {a.status !== "deleted" && (
+                            <button
+                              type="button"
+                              className="row-delete"
+                              onClick={() => setAction({ row: a, kind: "delete" })}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {rows.length === 0 && (
@@ -363,6 +417,40 @@ export function ArticlesView({
           or admin role.
         </div>
       )}
+
+      <ConfirmModal
+        open={action !== null}
+        title={
+          action
+            ? action.kind === "exclude"
+              ? "Exclude this article?"
+              : "Delete this article?"
+            : ""
+        }
+        destructive={action?.kind === "delete"}
+        confirmLabel={action?.kind === "exclude" ? "Exclude article" : "Delete article"}
+        busy={actionBusy}
+        onConfirm={runAction}
+        onCancel={() => setAction(null)}
+        body={
+          action ? (
+            action.kind === "exclude" ? (
+              <>
+                <strong>{action.row.headline}</strong> stops appearing in reports
+                and won&apos;t be re-captured by future pulls. It stays as a
+                tombstone; you can restore it by switching its status later.
+              </>
+            ) : (
+              <>
+                <strong>{action.row.headline}</strong> is soft-deleted — hidden
+                from reports and never re-captured. The record is kept as a
+                tombstone (its fingerprint must survive to prevent re-ingestion),
+                not removed.
+              </>
+            )
+          ) : null
+        }
+      />
     </>
   );
 }
