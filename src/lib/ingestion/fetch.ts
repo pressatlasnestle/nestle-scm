@@ -1,4 +1,4 @@
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import type {
   FeedItem,
   IngestionClient,
@@ -157,10 +157,19 @@ export function looksPaywalled(body: string): boolean {
 
 type ParsedNode = Record<string, unknown>;
 
-/** Pulls the item array out of RSS 2.0, RSS 1.0/RDF or Atom, whichever it is. */
+/**
+ * Pulls the item array out of RSS 2.0, RSS 1.0/RDF or Atom, whichever it is.
+ *
+ * `hasFeedRoot` is the difference between "this is a feed that happens to be
+ * empty right now" and "this is not a feed". A standing Google Alerts search
+ * that has matched nothing yet serves a perfectly valid Atom document with a
+ * <feed> root and no <entry> children; a newsroom HTML page has neither. Only
+ * the second is a misconfigured source.
+ */
 function extractEntries(doc: ParsedNode): {
   entries: ParsedNode[];
   feedTitle: string;
+  hasFeedRoot: boolean;
 } {
   const rss = doc["rss"] as ParsedNode | undefined;
   if (rss) {
@@ -168,6 +177,7 @@ function extractEntries(doc: ParsedNode): {
     return {
       entries: asArray(channel["item"]),
       feedTitle: firstNonEmpty(channel["title"]),
+      hasFeedRoot: true,
     };
   }
 
@@ -177,6 +187,7 @@ function extractEntries(doc: ParsedNode): {
     return {
       entries: asArray(rdf["item"]),
       feedTitle: firstNonEmpty(channel["title"]),
+      hasFeedRoot: true,
     };
   }
 
@@ -185,14 +196,19 @@ function extractEntries(doc: ParsedNode): {
     return {
       entries: asArray(feed["entry"]),
       feedTitle: firstNonEmpty(feed["title"]),
+      hasFeedRoot: true,
     };
   }
 
   // Some feeds omit the wrapper or use an unexpected root; fall back to any
   // top-level item/entry collection rather than failing the whole source.
+  // Finding entries this way still proves it is a feed — finding none proves
+  // nothing either way, so the root is reported as unrecognised.
+  const loose = asArray(doc["item"] ?? doc["entry"]);
   return {
-    entries: asArray(doc["item"] ?? doc["entry"]),
+    entries: loose,
     feedTitle: "",
+    hasFeedRoot: loose.length > 0,
   };
 }
 
@@ -206,6 +222,13 @@ export type ParseOutcome = {
   items: FeedItem[];
   itemsSeen: number;
   skippedPaywall: number;
+  /**
+   * The document parsed as XML and had a recognisable feed root. False means
+   * the URL is not a feed at all; it does NOT mean the feed was empty.
+   */
+  hasFeedRoot: boolean;
+  /** Set when the response is not well-formed XML, so cannot be a feed. */
+  xmlError: string | null;
 };
 
 /**
@@ -215,8 +238,22 @@ export type ParseOutcome = {
  * override.
  */
 export function parseFeed(xml: string, mediaFallback: string | null): ParseOutcome {
+  // XMLValidator first, because the parser is deliberately lenient: handed an
+  // HTML page it returns a shrug of an object rather than throwing, and the
+  // caller could not otherwise tell that apart from a valid empty feed.
+  const validation = XMLValidator.validate(xml, { allowBooleanAttributes: true });
+  if (validation !== true) {
+    return {
+      items: [],
+      itemsSeen: 0,
+      skippedPaywall: 0,
+      hasFeedRoot: false,
+      xmlError: validation.err.msg,
+    };
+  }
+
   const doc = parser.parse(xml) as ParsedNode;
-  const { entries, feedTitle } = extractEntries(doc);
+  const { entries, feedTitle, hasFeedRoot } = extractEntries(doc);
 
   const items: FeedItem[] = [];
   let skippedPaywall = 0;
@@ -270,7 +307,13 @@ export function parseFeed(xml: string, mediaFallback: string | null): ParseOutco
     });
   }
 
-  return { items, itemsSeen: entries.length, skippedPaywall };
+  return {
+    items,
+    itemsSeen: entries.length,
+    skippedPaywall,
+    hasFeedRoot,
+    xmlError: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -348,30 +391,36 @@ export async function fetchSource(
     const parsed = parseFeed(xml, source.name);
     const items = parsed.items.filter((item) => withinWindow(item, window));
 
-    // Zero entries at all is a misconfigured source, not a quiet one: several
-    // rows in the imported taxonomy point at an HTML newsroom page rather than
-    // a feed, which parses without throwing and yields nothing. Reporting that
-    // as 'no_new_items' would hide a permanently broken source behind a status
-    // that looks healthy.
-    result =
-      parsed.itemsSeen === 0
-        ? {
-            ...base,
-            status: "error",
-            items: [],
-            itemsSeen: 0,
-            skippedPaywall: 0,
-            error:
-              "Feed contained no <item>/<entry> elements — URL is probably an HTML page, not an RSS/Atom feed.",
-          }
-        : {
-            ...base,
-            status: items.length > 0 ? "ok" : "no_new_items",
-            items,
-            itemsSeen: parsed.itemsSeen,
-            skippedPaywall: parsed.skippedPaywall,
-            error: null,
-          };
+    // Two different failures used to be reported as one, and the wrong one
+    // won. Several rows in the imported taxonomy point at an HTML newsroom
+    // page rather than a feed — that is a permanently broken source and must
+    // not hide behind a healthy-looking status. But a standing Google Alerts
+    // search that has matched nothing yet serves a valid Atom document with a
+    // <feed> root and no <entry> children, and treating that as broken raised
+    // a false alarm on 11 alert feeds at once.
+    //
+    // So the question is no longer "were there entries" but "is this a feed":
+    //   not well-formed XML, or no recognisable feed root → error
+    //   a real feed with zero entries                     → no_new_items
+    result = !parsed.hasFeedRoot
+      ? {
+          ...base,
+          status: "error",
+          items: [],
+          itemsSeen: 0,
+          skippedPaywall: 0,
+          error: parsed.xmlError
+            ? `Response is not well-formed XML (${parsed.xmlError}) — URL is probably an HTML page, not an RSS/Atom feed.`
+            : "No <rss>, <rdf:RDF> or <feed> root element — URL is probably an HTML page, not an RSS/Atom feed.",
+        }
+      : {
+          ...base,
+          status: items.length > 0 ? "ok" : "no_new_items",
+          items,
+          itemsSeen: parsed.itemsSeen,
+          skippedPaywall: parsed.skippedPaywall,
+          error: null,
+        };
   } catch (err) {
     result = {
       ...base,
