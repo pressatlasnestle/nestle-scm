@@ -289,6 +289,7 @@ export type Database = {
           list_type: string
           match_type: string | null
           notes: string | null
+          variations: string[] | null
         }
         Insert: {
           added_by?: string | null
@@ -301,6 +302,7 @@ export type Database = {
           list_type?: string
           match_type?: string | null
           notes?: string | null
+          variations?: string[] | null
         }
         Update: {
           added_by?: string | null
@@ -313,6 +315,7 @@ export type Database = {
           list_type?: string
           match_type?: string | null
           notes?: string | null
+          variations?: string[] | null
         }
         Relationships: [
           {

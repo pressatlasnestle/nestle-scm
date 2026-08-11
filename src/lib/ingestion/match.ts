@@ -86,12 +86,37 @@ function escapeRegex(value: string): string {
 }
 
 /**
+ * Separator normalisation. A multi-word term reaches print with a space, a
+ * hyphen or nothing at all, and the three are the same term: "container ship"
+ * / "container-ship" / "containership", "Hapag-Lloyd" / "Hapag Lloyd",
+ * "front-loading" / "frontloading", "Bab al-Mandeb" / "Bab al Mandeb". So
+ * every separator position in a compiled term accepts any run of spaces and
+ * hyphens, including none.
+ *
+ * This is pure normalisation and needs no admin input — it is the reason the
+ * `variations` column does not have to carry the trivial re-spellings, only
+ * genuinely different words ("void sailing" for "blank sailing").
+ *
+ * `[\s-]*` is a flat character class with a single quantifier and no nesting,
+ * so it adds no backtracking risk. That matters: the same reasoning is why
+ * admin-supplied wildcards stayed out of `variations`.
+ */
+function joinWithSeparatorVariants(variant: string): string {
+  return variant
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map(escapeRegex)
+    .join("[\\s-]*");
+}
+
+/**
  * Builds the matcher for one variant.
  *
  * - Acronym            → case-sensitive, word-bounded, optional plural "s"
  *                        (so TEU matches "TEUs" but not "PHONE" or "Teuton").
  * - Exact phrase/Entity→ case-insensitive whole-phrase substring match, with
- *                        internal whitespace allowed to vary.
+ *                        separators allowed to vary (see
+ *                        joinWithSeparatorVariants).
  * - Stem / partial     → word-bounded root plus the common inflections
  *                        s/es/ing/ed. Crude by design: "blank sailing" also
  *                        catches "blank sailings", but nothing here knows that
@@ -99,7 +124,7 @@ function escapeRegex(value: string): string {
  *                        happens to cover it.
  */
 function compileVariant(variant: string, matchType: string | null): RegExp {
-  const escaped = escapeRegex(variant).replace(/\s+/g, "\\s+");
+  const escaped = joinWithSeparatorVariants(variant);
 
   if (isAcronym(variant)) {
     return new RegExp(`\\b${escaped}s?\\b`, "g");
@@ -121,8 +146,23 @@ export type CompiledKeyword = {
   patterns: RegExp[];
 };
 
+/**
+ * `variations` holds extra surface forms that mean the same thing as the
+ * keyword but are not derivable from it — synonyms ("void sailing" for "blank
+ * sailing"), abbreviations ("GRI"), transliterations ("Bab-el-Mandeb"), US
+ * spellings ("labor negotiation"). They are compiled exactly like the keyword's
+ * own variants and are equally sufficient to match; the row still reports its
+ * `keyword` text in matched_keywords, so nothing downstream has to learn about
+ * them.
+ *
+ * They go through splitVariants too, so a slash inside a variation splits the
+ * same way it does in the keyword itself.
+ */
 export function compileKeyword(row: KeywordRow): CompiledKeyword | null {
-  const variants = splitVariants(row.keyword);
+  const variants = [
+    ...splitVariants(row.keyword),
+    ...(row.variations ?? []).flatMap(splitVariants),
+  ];
   if (variants.length === 0) return null;
   return {
     keyword: row.keyword,
