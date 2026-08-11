@@ -12,6 +12,10 @@ import type { FeedItem, IngestionClient } from "./types";
  *
  * The last rule is what makes a curator's exclude/delete permanent across
  * every future run, so it is checked before anything else touches the row.
+ *
+ * On top of that, one cross-channel rule (see CHANNEL_PRIORITY): when the same
+ * fingerprint arrives from a different channel than the row was written by,
+ * channel priority decides outright and word count is not consulted.
  */
 
 export type DedupOutcome =
@@ -68,10 +72,50 @@ export function computeDedupKey(input: FingerprintInput): string {
   return createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
+/**
+ * Which fetch path produced an item. Recorded on the row and used to break
+ * cross-channel ties.
+ */
+export type SourceChannel = "media_rss" | "google_news_seed" | "newsdata";
+
+/**
+ * Most-preferred first. The ordering is about provenance, not length:
+ *
+ *   media_rss         the publisher's own feed — canonical URL, real byline,
+ *                     the fullest body that publisher chooses to syndicate
+ *   google_news_seed  Google's rendering of somebody else's story: the
+ *                     headline carries a " - Publisher" suffix we have to strip
+ *                     back off, the link is a Google redirect, and the body is
+ *                     a snippet
+ *   newsdata          an aggregator's summary. On the free tier it has no
+ *                     `content` field at all, so its body is a description
+ *
+ * Word count therefore cannot arbitrate between channels: an aggregator that
+ * pads a summary would beat the publisher's own feed on length while being
+ * strictly worse as a record. Within one channel word count still decides,
+ * exactly as before — a longer pull of the same story is a better pull.
+ */
+const CHANNEL_PRIORITY: SourceChannel[] = [
+  "media_rss",
+  "google_news_seed",
+  "newsdata",
+];
+
+/**
+ * Lower is better. An unrecognised or missing channel returns null, which the
+ * caller reads as "no channel information" and falls back to the word-count
+ * rule rather than guessing a rank.
+ */
+function channelRank(channel: string | null): number | null {
+  const index = CHANNEL_PRIORITY.indexOf(channel as SourceChannel);
+  return index === -1 ? null : index;
+}
+
 export type ArticleMatchData = {
   sourceId: string | null;
   matchedKeywords: string[];
   matchedNegativeKeywords: string[];
+  mentionCount: number;
 };
 
 type ExistingRow = {
@@ -80,6 +124,7 @@ type ExistingRow = {
   word_count: number | null;
   url: string | null;
   alt_urls: string[];
+  source_channel: string | null;
 };
 
 /**
@@ -90,7 +135,8 @@ type ExistingRow = {
 export async function upsertArticle(
   client: IngestionClient,
   item: FeedItem,
-  match: ArticleMatchData
+  match: ArticleMatchData,
+  channel: SourceChannel
 ): Promise<DedupResult> {
   const dedupKey = computeDedupKey(item);
 
@@ -105,7 +151,7 @@ export async function upsertArticle(
   }
 
   if (existing.row) {
-    return applyToExisting(client, existing.row, item, match, dedupKey);
+    return applyToExisting(client, existing.row, item, match, dedupKey, channel);
   }
 
   const { data, error } = await client
@@ -117,11 +163,13 @@ export async function upsertArticle(
       byline: item.byline,
       media: item.media,
       source_id: match.sourceId,
+      source_channel: channel,
       published_at: toDateOnly(item.publishedAt),
       body: item.body,
       word_count: item.wordCount,
       status: "active",
       matched_keywords: match.matchedKeywords,
+      keyword_mention_count: match.mentionCount,
       matched_negative_keywords:
         match.matchedNegativeKeywords.length > 0
           ? match.matchedNegativeKeywords
@@ -137,7 +185,14 @@ export async function upsertArticle(
     if (error.code === "23505") {
       const retry = await findByDedupKey(client, dedupKey);
       if (retry.row) {
-        return applyToExisting(client, retry.row, item, match, dedupKey);
+        return applyToExisting(
+          client,
+          retry.row,
+          item,
+          match,
+          dedupKey,
+          channel
+        );
       }
     }
     return {
@@ -157,7 +212,7 @@ async function findByDedupKey(
 ): Promise<{ row: ExistingRow | null; error: string | null }> {
   const { data, error } = await client
     .from("articles")
-    .select("id, status, word_count, url, alt_urls")
+    .select("id, status, word_count, url, alt_urls, source_channel")
     .eq("dedup_key", dedupKey)
     .maybeSingle();
 
@@ -165,12 +220,42 @@ async function findByDedupKey(
   return { row: data, error: null };
 }
 
+/**
+ * Does the incoming pull replace the stored one?
+ *
+ * Different channels → priority decides outright, in both directions. A
+ * media_rss pull supersedes a stored newsdata row even when the aggregator's
+ * padded summary is longer, and a newsdata pull is discarded against a stored
+ * media_rss row even when it is longer. Provenance beats length.
+ *
+ * Same channel, or no channel recorded on the stored row → the original
+ * word-count rule, unchanged. A null here is a row written before
+ * source_channel existed; ranking it against a known channel would be
+ * inventing provenance, so it falls through to the rule that was in force when
+ * it was written.
+ */
+function shouldSupersede(
+  row: ExistingRow,
+  item: FeedItem,
+  channel: SourceChannel
+): boolean {
+  const incomingRank = channelRank(channel);
+  const storedRank = channelRank(row.source_channel);
+
+  if (incomingRank !== null && storedRank !== null && incomingRank !== storedRank) {
+    return incomingRank < storedRank;
+  }
+
+  return item.wordCount > (row.word_count ?? 0);
+}
+
 async function applyToExisting(
   client: IngestionClient,
   row: ExistingRow,
   item: FeedItem,
   match: ArticleMatchData,
-  dedupKey: string
+  dedupKey: string,
+  channel: SourceChannel
 ): Promise<DedupResult> {
   // Tombstone: excluded/deleted articles are never revived, never updated,
   // never counted as anything but a skip.
@@ -183,8 +268,7 @@ async function applyToExisting(
     };
   }
 
-  const isLonger = item.wordCount > (row.word_count ?? 0);
-  if (!isLonger) {
+  if (!shouldSupersede(row, item, channel)) {
     return { outcome: "duplicate", dedupKey, articleId: row.id, error: null };
   }
 
@@ -202,9 +286,14 @@ async function applyToExisting(
       word_count: item.wordCount,
       url: item.url ?? row.url,
       alt_urls: altUrls,
+      // The row now IS the incoming pull, so its provenance is the incoming
+      // channel — otherwise a media_rss row that supersedes a newsdata one
+      // would keep claiming it came from the aggregator.
+      source_channel: channel,
       // Recomputed from the longer body, so the matches stored alongside it
       // stay consistent with the text they were derived from.
       matched_keywords: match.matchedKeywords,
+      keyword_mention_count: match.mentionCount,
       matched_negative_keywords:
         match.matchedNegativeKeywords.length > 0
           ? match.matchedNegativeKeywords

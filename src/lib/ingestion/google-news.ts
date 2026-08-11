@@ -159,8 +159,16 @@ export async function runGoogleNewsSweep(
         );
 
       // source_id stays null: these items belong to no row in `sources`.
-      // The publisher name still lands in articles.media.
-      await ingestItems(client, items, null, keywords, counters);
+      // The publisher name still lands in articles.media, and source_channel
+      // records that the row came from the sweep rather than a curated feed.
+      await ingestItems(
+        client,
+        items,
+        null,
+        keywords,
+        counters,
+        "google_news_seed"
+      );
     } catch (err) {
       errors.push({
         source: `Google News: ${query.label}`,

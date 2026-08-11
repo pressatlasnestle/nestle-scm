@@ -58,10 +58,12 @@ export type Database = {
           headline: string
           id: string
           ingested_at: string
+          keyword_mention_count: number | null
           matched_keywords: string[]
           matched_negative_keywords: string[] | null
           media: string | null
           published_at: string | null
+          source_channel: string | null
           source_id: string | null
           status: string
           status_changed_at: string | null
@@ -83,10 +85,12 @@ export type Database = {
           headline: string
           id?: string
           ingested_at?: string
+          keyword_mention_count?: number | null
           matched_keywords?: string[]
           matched_negative_keywords?: string[] | null
           media?: string | null
           published_at?: string | null
+          source_channel?: string | null
           source_id?: string | null
           status?: string
           status_changed_at?: string | null
@@ -108,10 +112,12 @@ export type Database = {
           headline?: string
           id?: string
           ingested_at?: string
+          keyword_mention_count?: number | null
           matched_keywords?: string[]
           matched_negative_keywords?: string[] | null
           media?: string | null
           published_at?: string | null
+          source_channel?: string | null
           source_id?: string | null
           status?: string
           status_changed_at?: string | null

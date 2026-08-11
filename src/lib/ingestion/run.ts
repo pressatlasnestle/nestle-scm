@@ -1,5 +1,5 @@
 import { fetchSource, type FetchSourceResult } from "./fetch";
-import { upsertArticle } from "./dedup";
+import { upsertArticle, type SourceChannel } from "./dedup";
 import { loadKeywords, matchArticle, type KeywordSet } from "./match";
 import type {
   FeedItem,
@@ -176,7 +176,8 @@ export async function ingestItems(
   items: FeedItem[],
   sourceId: string | null,
   keywords: KeywordSet,
-  counters: RunCounters
+  counters: RunCounters,
+  channel: SourceChannel
 ): Promise<void> {
   for (const item of items) {
     counters.articlesFound += 1;
@@ -197,11 +198,17 @@ export async function ingestItems(
       continue;
     }
 
-    const result = await upsertArticle(client, item, {
-      sourceId,
-      matchedKeywords: decision.matchedKeywords,
-      matchedNegativeKeywords: decision.matchedNegativeKeywords,
-    });
+    const result = await upsertArticle(
+      client,
+      item,
+      {
+        sourceId,
+        matchedKeywords: decision.matchedKeywords,
+        matchedNegativeKeywords: decision.matchedNegativeKeywords,
+        mentionCount: decision.mentionCount,
+      },
+      channel
+    );
 
     if (result.outcome === "inserted") counters.articlesNew += 1;
     // 'updated' and 'skipped_tombstoned' are both "we already knew this story":
@@ -305,7 +312,16 @@ export async function executeRun(
         continue;
       }
 
-      await ingestItems(client, fetched.items, source.id, keywords, counters);
+      // Every run type that goes through executeRun reads a curated source's
+      // own feed, so they all write the same channel.
+      await ingestItems(
+        client,
+        fetched.items,
+        source.id,
+        keywords,
+        counters,
+        "media_rss"
+      );
     }
   }
 

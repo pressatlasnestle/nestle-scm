@@ -179,6 +179,22 @@ function hits(compiled: CompiledKeyword, text: string): boolean {
   });
 }
 
+/**
+ * How many times this keyword's terms occur in the text. Every pattern is
+ * global, and String.match with a global regex ignores and resets lastIndex, so
+ * the shared compiled patterns stay safe to reuse across articles.
+ *
+ * Variants are summed, not de-overlapped: an article naming both "MSC" and
+ * "Mediterranean Shipping Company" counts two. That is the intended reading —
+ * the number is a density signal, not a distinct-term count.
+ */
+function occurrences(compiled: CompiledKeyword, text: string): number {
+  return compiled.patterns.reduce(
+    (total, pattern) => total + (text.match(pattern)?.length ?? 0),
+    0
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Keyword set
 // ---------------------------------------------------------------------------
@@ -240,6 +256,12 @@ export type MatchDecision =
       captured: true;
       matchedKeywords: string[];
       matchedNegativeKeywords: string[];
+      /**
+       * Total occurrences of the matched positive keywords across headline +
+       * body. Informational: it is computed after the capture decision is
+       * already made and never feeds back into it.
+       */
+      mentionCount: number;
     }
   | { captured: false; reason: "failed_gate" | "suppressed_exclusion" };
 
@@ -286,9 +308,22 @@ export function matchArticle(
     ...gate2Hits.map((k) => k.keyword),
   ];
 
+  // Counted over the keywords that actually hit, not the whole set — the
+  // question this answers is "how heavily is this article about the things it
+  // matched", so a term that never appears contributes nothing either way.
+  const mentionCount = [...gate1Hits, ...gate2Hits].reduce(
+    (total, k) => total + occurrences(k, text),
+    0
+  );
+
   const exclusionHits = keywords.exclusions.filter((k) => hits(k, text));
   if (exclusionHits.length === 0) {
-    return { captured: true, matchedKeywords, matchedNegativeKeywords: [] };
+    return {
+      captured: true,
+      matchedKeywords,
+      matchedNegativeKeywords: [],
+      mentionCount,
+    };
   }
 
   const anchoredInHeadline = keywords.gate1.some((k) => hits(k, headline));
@@ -300,5 +335,6 @@ export function matchArticle(
     captured: true,
     matchedKeywords,
     matchedNegativeKeywords: exclusionHits.map((k) => k.keyword),
+    mentionCount,
   };
 }
