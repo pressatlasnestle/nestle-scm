@@ -1,6 +1,13 @@
 import { fetchFeedXml, parseFeed } from "./fetch";
 import { loadKeywords, GATE_2 } from "./match";
-import { ingestItems, type RunCounters, type RunError, type RunSummary } from "./run";
+import {
+  ingestItems,
+  scheduleSorting,
+  type ExecuteRunOptions,
+  type RunCounters,
+  type RunError,
+  type RunSummary,
+} from "./run";
 import type { FeedItem, IngestionClient, KeywordRow } from "./types";
 
 /**
@@ -100,7 +107,8 @@ export function stripPublisherSuffix(item: FeedItem): FeedItem {
 }
 
 export async function runGoogleNewsSweep(
-  client: IngestionClient
+  client: IngestionClient,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const end = new Date();
   const start = new Date(end.getTime() - SWEEP_WINDOW_DAYS * 24 * 3600 * 1000);
@@ -117,6 +125,7 @@ export async function runGoogleNewsSweep(
     articlesDuplicate: 0,
     articlesSkippedPaywall: 0,
     articlesSuppressedExclusion: 0,
+    insertedArticleIds: [],
   };
   const errors: RunError[] = [];
 
@@ -133,7 +142,7 @@ export async function runGoogleNewsSweep(
   const runId = runRow?.id ?? null;
 
   if (keywordError) {
-    return finish(client, runId, counters, [
+    return finish(client, runId, counters, defer, [
       { source: "(keywords)", sourceId: null, error: keywordError.message },
     ]);
   }
@@ -178,13 +187,14 @@ export async function runGoogleNewsSweep(
     }
   }
 
-  return finish(client, runId, counters, errors, queries.length);
+  return finish(client, runId, counters, defer, errors, queries.length);
 }
 
 async function finish(
   client: IngestionClient,
   runId: string | null,
   counters: RunCounters,
+  defer: ExecuteRunOptions["defer"] | undefined,
   errors: RunError[],
   queryCount = 0
 ): Promise<RunSummary> {
@@ -222,6 +232,11 @@ async function finish(
       })
       .eq("id", runId);
   }
+
+  // Stage 1 sorting, same as the per-source path in executeRun(). This sweep is
+  // manual-only and CLI-triggered, so there is no defer: it runs inline before
+  // the command returns.
+  await scheduleSorting(client, counters, defer);
 
   return summary;
 }

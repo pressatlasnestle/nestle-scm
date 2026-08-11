@@ -1,5 +1,12 @@
 import { loadKeywords } from "./match";
-import { ingestItems, type RunCounters, type RunError, type RunSummary } from "./run";
+import {
+  ingestItems,
+  scheduleSorting,
+  type ExecuteRunOptions,
+  type RunCounters,
+  type RunError,
+  type RunSummary,
+} from "./run";
 import type { FeedItem, IngestionClient } from "./types";
 
 /**
@@ -294,7 +301,8 @@ export async function selectDomainTargets(
 
 export async function runNewsApiAiSweep(
   client: IngestionClient,
-  triggeredBy: string | null = null
+  triggeredBy: string | null = null,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const end = new Date();
   const start = new Date(end.getTime() - WINDOW_DAYS * 24 * 3600 * 1000);
@@ -306,6 +314,7 @@ export async function runNewsApiAiSweep(
     articlesDuplicate: 0,
     articlesSkippedPaywall: 0,
     articlesSuppressedExclusion: 0,
+    insertedArticleIds: [],
   };
   const errors: RunError[] = [];
 
@@ -330,7 +339,7 @@ export async function runNewsApiAiSweep(
       selectDomainTargets(client),
     ]);
   } catch (err) {
-    return finish(client, runId, counters, [
+    return finish(client, runId, counters, defer, [
       {
         source: "(newsapi.ai setup)",
         sourceId: null,
@@ -348,7 +357,7 @@ export async function runNewsApiAiSweep(
     console.warn(
       "[newsapi.ai] no gap sources have a website_domain set — nothing to sweep."
     );
-    return finish(client, runId, counters, errors);
+    return finish(client, runId, counters, defer, errors);
   }
 
   const keywords = await loadKeywords(client);
@@ -411,13 +420,14 @@ export async function runNewsApiAiSweep(
       (truncated ? " Page cap reached." : "")
   );
 
-  return finish(client, runId, counters, errors);
+  return finish(client, runId, counters, defer, errors);
 }
 
 async function finish(
   client: IngestionClient,
   runId: string | null,
   counters: RunCounters,
+  defer: ExecuteRunOptions["defer"] | undefined,
   errors: RunError[]
 ): Promise<RunSummary> {
   // One request covers every domain, so there is no per-domain outcome to be
@@ -449,6 +459,10 @@ async function finish(
       })
       .eq("id", runId);
   }
+
+  // Stage 1 sorting, same as the per-source path in executeRun(). No defer:
+  // this sweep is CLI-triggered, so the pass runs inline before it returns.
+  await scheduleSorting(client, counters, defer);
 
   return summary;
 }

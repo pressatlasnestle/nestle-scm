@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -96,19 +96,25 @@ export async function POST(request: Request) {
 
   const client = createAdminClient();
 
+  // Stage 1 sorting is one Gemini call per newly inserted article. after()
+  // hands it to the platform once the response has been sent, so a run that
+  // captures 40 articles still answers in the time the fetch took — which
+  // matters most for the cron caller, sitting under this route's maxDuration.
+  const defer = (task: () => Promise<void>) => after(task);
+
   try {
     const summary =
       runType === "backfill"
-        ? await runBackfill(client)
+        ? await runBackfill(client, null, defer)
         : runType === "scheduled"
-          ? await runScheduled(client)
+          ? await runScheduled(client, defer)
           : runType === "manual"
-            ? await runManual(client)
+            ? await runManual(client, null, defer)
             : runType === "google_news_sweep"
               ? await runGoogleNewsSweep(client)
               : runType === "newsapi_ai_sweep"
                 ? await runNewsApiAiSweep(client)
-                : await runForSource(client, body.sourceId as string);
+                : await runForSource(client, body.sourceId as string, null, defer);
 
     return NextResponse.json(summary);
   } catch (err) {

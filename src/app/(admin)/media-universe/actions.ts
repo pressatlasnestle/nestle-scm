@@ -50,6 +50,8 @@ export async function addSource(input: {
     const sourceId = data.id;
     after(async () => {
       try {
+        // Already inside after(), so the Stage 1 sorting pass can just run
+        // inline at the end of the run rather than being deferred again.
         await runForSource(createAdminClient(), sourceId, userId);
       } catch (err) {
         console.error("[ingestion] source_added run failed:", err);

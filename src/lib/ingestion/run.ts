@@ -1,6 +1,7 @@
 import { fetchSource, type FetchSourceResult } from "./fetch";
 import { upsertArticle, type SourceChannel } from "./dedup";
 import { loadKeywords, matchArticle, type KeywordSet } from "./match";
+import { sortArticles } from "@/lib/analysis/sorting";
 import type {
   FeedItem,
   IngestionClient,
@@ -45,6 +46,13 @@ export type RunCounters = {
   articlesDuplicate: number;
   articlesSkippedPaywall: number;
   articlesSuppressedExclusion: number;
+  /**
+   * Ids of the rows this run inserted. Not a counter, but it rides on the same
+   * accumulator every run type already threads through ingestItems() — which
+   * is what makes the Stage 1 sorting pass fire for the Google News and
+   * newsapi.ai sweeps too, not just the per-source path.
+   */
+  insertedArticleIds: string[];
 };
 
 export type RunError = { source: string; sourceId: string | null; error: string };
@@ -129,6 +137,7 @@ function emptyCounters(): RunCounters {
     articlesDuplicate: 0,
     articlesSkippedPaywall: 0,
     articlesSuppressedExclusion: 0,
+    insertedArticleIds: [],
   };
 }
 
@@ -229,7 +238,10 @@ export async function ingestItems(
       channel
     );
 
-    if (result.outcome === "inserted") counters.articlesNew += 1;
+    if (result.outcome === "inserted") {
+      counters.articlesNew += 1;
+      if (result.articleId) counters.insertedArticleIds.push(result.articleId);
+    }
     // 'updated' and 'skipped_tombstoned' are both "we already knew this story":
     // one enriched an existing row, one hit a curator's tombstone. Neither is
     // new, so both roll up with plain duplicates.
@@ -244,7 +256,54 @@ export type ExecuteRunOptions = {
   triggeredBy?: string | null;
   /** Pre-loaded to avoid re-reading the keyword table per source. */
   keywords?: KeywordSet;
+  /**
+   * How to run the post-run Stage 1 sorting pass.
+   *
+   * Request-scoped callers pass next/server's after(), so the HTTP response is
+   * not held open for one Gemini call per new article. The CLI passes nothing
+   * and the pass runs inline before the process exits — a script that returned
+   * before its work finished would simply lose it, there being no server
+   * lifetime to hand the task to.
+   */
+  defer?: (task: () => Promise<void>) => void;
 };
+
+/**
+ * Fires Stage 1 sorting over the rows a run just inserted.
+ *
+ * Never allowed to affect the run: sorting is annotation, and an unset Gemini
+ * key or a bad model id must not turn a successful ingest into a failed one.
+ * Failures land in the log and the rows stay 'pending', so `npm run sort`
+ * picks them up later.
+ */
+export async function scheduleSorting(
+  client: IngestionClient,
+  counters: RunCounters,
+  defer?: ExecuteRunOptions["defer"]
+): Promise<void> {
+  const articleIds = [...counters.insertedArticleIds];
+  if (articleIds.length === 0) return;
+
+  const task = async () => {
+    try {
+      const result = await sortArticles(client, articleIds);
+      console.log(
+        `[sorting] ${result.processed} sorted (${result.flagged} flagged, ${result.confirmed} confirmed), ${result.failed} failed`
+      );
+      for (const e of result.errors) {
+        console.error(`[sorting] ${e.articleId}: ${e.error}`);
+      }
+    } catch (err) {
+      console.error(
+        "[sorting] post-ingestion pass failed:",
+        err instanceof Error ? err.message : err
+      );
+    }
+  };
+
+  if (defer) defer(task);
+  else await task();
+}
 
 export async function executeRun(
   client: IngestionClient,
@@ -354,6 +413,12 @@ export async function executeRun(
 
   const summary: RunSummary = { ...counters, runId, runType, status, errors };
   await closeRun(client, runId, summary);
+
+  // After closeRun, so the run is already logged as finished before any Gemini
+  // call is made — sorting is a separate concern and must not widen the run's
+  // recorded duration or its status.
+  await scheduleSorting(client, counters, options.defer);
+
   return summary;
 }
 
@@ -369,7 +434,8 @@ function windowEndingNow(spanMs: number): IngestionWindow {
 /** One-time seed: all active sources for the current universe mode, 7 days. */
 export async function runBackfill(
   client: IngestionClient,
-  triggeredBy: string | null = null
+  triggeredBy: string | null = null,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
@@ -378,6 +444,7 @@ export async function runBackfill(
     window: windowEndingNow(WINDOW_BACKFILL_MS),
     sources,
     triggeredBy,
+    defer,
   });
 }
 
@@ -386,7 +453,8 @@ export async function runBackfill(
  * second half of the previous run; the dedup fingerprint makes it free.
  */
 export async function runScheduled(
-  client: IngestionClient
+  client: IngestionClient,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
@@ -394,13 +462,15 @@ export async function runScheduled(
     runType: "scheduled",
     window: windowEndingNow(WINDOW_SCHEDULED_MS),
     sources,
+    defer,
   });
 }
 
 /** Operator-triggered re-run; same shape as scheduled, logged separately. */
 export async function runManual(
   client: IngestionClient,
-  triggeredBy: string | null = null
+  triggeredBy: string | null = null,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
@@ -409,6 +479,7 @@ export async function runManual(
     window: windowEndingNow(WINDOW_SCHEDULED_MS),
     sources,
     triggeredBy,
+    defer,
   });
 }
 
@@ -420,7 +491,8 @@ export async function runManual(
 export async function runForSource(
   client: IngestionClient,
   sourceId: string,
-  triggeredBy: string | null = null
+  triggeredBy: string | null = null,
+  defer?: ExecuteRunOptions["defer"]
 ): Promise<RunSummary> {
   const { data, error } = await client
     .from("sources")
@@ -449,5 +521,6 @@ export async function runForSource(
     window: windowEndingNow(WINDOW_BACKFILL_MS),
     sources: [data],
     triggeredBy,
+    defer,
   });
 }
