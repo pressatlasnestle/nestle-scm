@@ -4,17 +4,17 @@ import { ArticlesView, type ArticleRow } from "./ArticlesView";
 
 export const dynamic = "force-dynamic";
 
-export const PAGE_SIZE = 50;
+const PAGE_SIZE = 50;
 
-export type ArticleStatusFilter = "active" | "excluded" | "deleted" | "all";
-export type ChannelFilter =
+type ArticleStatusFilter = "active" | "excluded" | "deleted" | "all";
+type ChannelFilter =
   | "all"
   | "media_rss"
   | "google_alerts"
   | "google_news_seed"
   | "newsdata";
-export type SortKey = "published" | "mentions";
-export type SortDir = "asc" | "desc";
+type SortKey = "published" | "mentions";
+type SortDir = "asc" | "desc";
 
 type SearchParams = {
   q?: string;

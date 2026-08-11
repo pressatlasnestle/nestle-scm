@@ -1,8 +1,33 @@
 "use client";
 
-import { useTransition, type CSSProperties } from "react";
+import { useEffect, useState, useTransition, type CSSProperties } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { shortDate } from "@/lib/format";
+
+const CHANNEL_OPTIONS: { value: string; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "media_rss", label: "RSS" },
+  { value: "google_alerts", label: "Google Alerts" },
+  { value: "google_news_seed", label: "Google News" },
+  { value: "newsdata", label: "NewsData" },
+];
+
+const STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "excluded", label: "Excluded" },
+  { value: "deleted", label: "Deleted" },
+  { value: "all", label: "All" },
+];
+
+const selectStyle: CSSProperties = {
+  background: "var(--panel-raised)",
+  border: "1px solid var(--line)",
+  borderRadius: 7,
+  padding: "8px 11px",
+  fontSize: 12.5,
+  color: "var(--text)",
+  fontFamily: "var(--font-body)",
+};
 
 export type ArticleRow = {
   id: string;
@@ -123,11 +148,46 @@ export function ArticlesView({
   const from = total === 0 ? 0 : (filters.page - 1) * pageSize + 1;
   const to = Math.min(filters.page * pageSize, total);
 
-  function goToPage(page: number) {
+  const [qLocal, setQLocal] = useState(filters.q);
+
+  // Push params to the URL (server re-queries). Resets to page 1 unless the
+  // update is itself a page change.
+  function setParams(updates: Record<string, string | null>) {
     const params = new URLSearchParams(searchParams.toString());
-    params.set("page", String(page));
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") params.delete(k);
+      else params.set(k, v);
+    }
+    if (!("page" in updates)) params.set("page", "1");
     startTransition(() => router.push(`${pathname}?${params.toString()}`));
   }
+
+  // Debounce the headline search so we don't navigate on every keystroke.
+  useEffect(() => {
+    if (qLocal === filters.q) return;
+    const t = setTimeout(() => setParams({ q: qLocal || null }), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qLocal]);
+
+  function goToPage(page: number) {
+    setParams({ page: String(page) });
+  }
+
+  function toggleMentionsSort() {
+    if (filters.sort !== "mentions") setParams({ sort: "mentions", dir: "desc" });
+    else if (filters.dir === "desc") setParams({ sort: "mentions", dir: "asc" });
+    else setParams({ sort: null, dir: null }); // back to default (published desc)
+  }
+
+  const mentionsArrow =
+    filters.sort === "mentions" ? (filters.dir === "desc" ? " ↓" : " ↑") : "";
+
+  const filtering =
+    filters.q !== "" ||
+    filters.channel !== "all" ||
+    filters.neg ||
+    filters.status !== "active";
 
   const colCount = 7;
 
@@ -145,11 +205,60 @@ export function ArticlesView({
       </div>
 
       <div className="table-card">
-        <div className="table-toolbar" style={{ flexWrap: "wrap" }}>
-          <span className="cell-sub">
+        <div className="table-toolbar" style={{ flexWrap: "wrap", gap: 12 }}>
+          <input
+            className="search-input"
+            placeholder="Search headlines…"
+            value={qLocal}
+            onChange={(e) => setQLocal(e.target.value)}
+          />
+          <select
+            style={selectStyle}
+            aria-label="Channel"
+            value={filters.channel}
+            onChange={(e) =>
+              setParams({ channel: e.target.value === "all" ? null : e.target.value })
+            }
+          >
+            {CHANNEL_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label === "All" ? "All channels" : o.label}
+              </option>
+            ))}
+          </select>
+          <select
+            style={selectStyle}
+            aria-label="Status"
+            value={filters.status}
+            onChange={(e) =>
+              setParams({ status: e.target.value === "active" ? null : e.target.value })
+            }
+          >
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label === "All" ? "All statuses" : o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-pressed={filters.neg}
+            onClick={() => setParams({ neg: filters.neg ? null : "1" })}
+            style={
+              filters.neg
+                ? { background: "var(--amber-dim)", borderColor: "rgba(240,174,78,0.4)", color: "var(--amber)" }
+                : undefined
+            }
+          >
+            ⚠ Flagged only
+          </button>
+          <span className="cell-sub" style={{ marginLeft: "auto" }}>
             {total === 0
               ? "No articles"
-              : `Showing ${from}–${to} of ${total}`}
+              : filtering
+                ? `${from}–${to} of ${total} filtered`
+                : `Showing ${from}–${to} of ${total}`}
           </span>
         </div>
 
@@ -170,7 +279,13 @@ export function ArticlesView({
                   <th>Published</th>
                   <th>Matched keywords</th>
                   <th>Flag</th>
-                  <th>Mentions</th>
+                  <th
+                    onClick={toggleMentionsSort}
+                    style={{ cursor: "pointer", userSelect: "none" }}
+                    title="Sort by mention count"
+                  >
+                    Mentions{mentionsArrow}
+                  </th>
                   <th>Words</th>
                 </tr>
               </thead>
