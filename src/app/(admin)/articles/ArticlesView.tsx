@@ -5,7 +5,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { shortDate } from "@/lib/format";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
-import { excludeArticle, deleteArticle } from "./actions";
+import { excludeArticle, deleteArticle, bulkExcludeArticles } from "./actions";
 
 const CHANNEL_OPTIONS: { value: string; label: string }[] = [
   { value: "all", label: "All" },
@@ -153,6 +153,52 @@ export function ArticlesView({
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
 
+  // Bulk selection (curate only). Only rows on the current page are selectable;
+  // selection is cleared whenever the view (filters/page) changes.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const filterKey = JSON.stringify(filters);
+  useEffect(() => {
+    setSelected(new Set());
+  }, [filterKey]);
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Rows on this page that can still be excluded (not already excluded).
+  const excludableIds = rows
+    .filter((r) => r.status !== "excluded")
+    .map((r) => r.id);
+
+  function toggleAll() {
+    setSelected((prev) =>
+      prev.size >= excludableIds.length && excludableIds.length > 0
+        ? new Set()
+        : new Set(excludableIds)
+    );
+  }
+
+  function runBulk() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    startTransition(async () => {
+      const res = await bulkExcludeArticles(ids);
+      setBulkBusy(false);
+      setBulkOpen(false);
+      setSelected(new Set());
+      if (res.ok) toast.success(`Excluded ${res.count ?? ids.length} articles.`);
+      else toast.error(res.error);
+    });
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (filters.page - 1) * pageSize + 1;
   const to = Math.min(filters.page * pageSize, total);
@@ -217,7 +263,9 @@ export function ArticlesView({
     });
   }
 
-  const colCount = 7 + (canCurate ? 1 : 0);
+  const colCount = 7 + (canCurate ? 2 : 0);
+  const allOnPageSelected =
+    excludableIds.length > 0 && selected.size >= excludableIds.length;
 
   return (
     <>
@@ -290,6 +338,32 @@ export function ArticlesView({
           </span>
         </div>
 
+        {canCurate && selected.size > 0 && (
+          <div
+            className="table-toolbar"
+            style={{
+              justifyContent: "space-between",
+              background: "var(--teal-dim)",
+              borderBottom: "1px solid var(--line)",
+            }}
+          >
+            <span style={{ color: "var(--teal)", fontWeight: 600, fontSize: 13 }}>
+              {selected.size} selected
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-sm" onClick={() => setSelected(new Set())}>
+                Clear
+              </button>
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => setBulkOpen(true)}
+              >
+                Exclude {selected.size} selected
+              </button>
+            </div>
+          </div>
+        )}
+
         {rows.length === 0 ? (
           <div className="empty-state">
             <div className="empty-title">No articles</div>
@@ -302,6 +376,22 @@ export function ArticlesView({
             <table>
               <thead>
                 <tr>
+                  {canCurate && (
+                    <th style={{ width: 34 }}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all on page"
+                        checked={allOnPageSelected}
+                        ref={(el) => {
+                          if (el)
+                            el.indeterminate =
+                              selected.size > 0 && !allOnPageSelected;
+                        }}
+                        onChange={toggleAll}
+                        disabled={excludableIds.length === 0}
+                      />
+                    </th>
+                  )}
                   <th>Headline</th>
                   <th>Media</th>
                   <th>Published</th>
@@ -321,6 +411,17 @@ export function ArticlesView({
               <tbody>
                 {rows.map((a) => (
                   <tr key={a.id}>
+                    {canCurate && (
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${a.headline}`}
+                          checked={selected.has(a.id)}
+                          disabled={a.status === "excluded"}
+                          onChange={() => toggleRow(a.id)}
+                        />
+                      </td>
+                    )}
                     <td style={{ maxWidth: 360 }}>
                       {a.url ? (
                         <a
@@ -449,6 +550,23 @@ export function ArticlesView({
               </>
             )
           ) : null
+        }
+      />
+
+      <ConfirmModal
+        open={bulkOpen}
+        title={`Exclude ${selected.size} article${selected.size === 1 ? "" : "s"}?`}
+        destructive
+        confirmLabel={`Exclude ${selected.size}`}
+        busy={bulkBusy}
+        onConfirm={runBulk}
+        onCancel={() => setBulkOpen(false)}
+        body={
+          <>
+            The selected articles stop appearing in reports and won&apos;t be
+            re-captured by future pulls. Each is kept as a tombstone, and each
+            exclusion is logged individually to the audit trail.
+          </>
         }
       />
     </>
