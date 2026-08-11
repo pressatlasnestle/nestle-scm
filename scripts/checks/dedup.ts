@@ -93,18 +93,18 @@ type Check = {
 };
 
 const CHECKS: Check[] = [
-  { name: "fresh insert records channel + mention count", existing: null, incoming: "newsdata", words: 40, expect: "inserted" },
+  { name: "fresh insert records channel + mention count", existing: null, incoming: "newsapi_ai", words: 40, expect: "inserted" },
 
   // cross-channel: priority wins outright, in BOTH directions
-  { name: "media_rss beats stored newsdata even when SHORTER", existing: row("newsdata", 900), incoming: "media_rss", words: 40, expect: "updated" },
-  { name: "newsdata loses to stored media_rss even when LONGER", existing: row("media_rss", 40), incoming: "newsdata", words: 900, expect: "duplicate" },
+  { name: "media_rss beats stored newsapi_ai even when SHORTER", existing: row("newsapi_ai", 900), incoming: "media_rss", words: 40, expect: "updated" },
+  { name: "newsapi_ai loses to stored media_rss even when LONGER", existing: row("media_rss", 40), incoming: "newsapi_ai", words: 900, expect: "duplicate" },
   { name: "media_rss beats stored google_news_seed when shorter", existing: row("google_news_seed", 500), incoming: "media_rss", words: 30, expect: "updated" },
-  { name: "google_news_seed beats stored newsdata when shorter", existing: row("newsdata", 500), incoming: "google_news_seed", words: 30, expect: "updated" },
+  { name: "google_news_seed beats stored newsapi_ai when shorter", existing: row("newsapi_ai", 500), incoming: "google_news_seed", words: 30, expect: "updated" },
   { name: "google_news_seed loses to stored media_rss when longer", existing: row("media_rss", 30), incoming: "google_news_seed", words: 500, expect: "duplicate" },
 
   // google_alerts sits between media_rss and the two aggregator seeds
-  { name: "google_alerts beats stored newsdata even when SHORTER", existing: row("newsdata", 900), incoming: "google_alerts", words: 40, expect: "updated" },
-  { name: "newsdata loses to stored google_alerts even when LONGER", existing: row("google_alerts", 40), incoming: "newsdata", words: 900, expect: "duplicate" },
+  { name: "google_alerts beats stored newsapi_ai even when SHORTER", existing: row("newsapi_ai", 900), incoming: "google_alerts", words: 40, expect: "updated" },
+  { name: "newsapi_ai loses to stored google_alerts even when LONGER", existing: row("google_alerts", 40), incoming: "newsapi_ai", words: 900, expect: "duplicate" },
   { name: "google_alerts beats stored google_news_seed when shorter", existing: row("google_news_seed", 500), incoming: "google_alerts", words: 30, expect: "updated" },
   { name: "google_alerts loses to stored media_rss even when LONGER", existing: row("media_rss", 40), incoming: "google_alerts", words: 900, expect: "duplicate" },
   { name: "media_rss beats stored google_alerts when shorter", existing: row("google_alerts", 500), incoming: "media_rss", words: 30, expect: "updated" },
@@ -113,15 +113,22 @@ const CHECKS: Check[] = [
   // same channel: unchanged word-count tiebreak
   { name: "same channel, longer wins", existing: row("media_rss", 100), incoming: "media_rss", words: 400, expect: "updated" },
   { name: "same channel, not longer loses", existing: row("media_rss", 400), incoming: "media_rss", words: 100, expect: "duplicate" },
-  { name: "same channel, equal length loses", existing: row("newsdata", 100), incoming: "newsdata", words: 100, expect: "duplicate" },
+  { name: "same channel, equal length loses", existing: row("newsapi_ai", 100), incoming: "newsapi_ai", words: 100, expect: "duplicate" },
 
   // pre-migration rows with no channel fall back to word count
-  { name: "null stored channel, longer wins", existing: row(null, 100), incoming: "newsdata", words: 400, expect: "updated" },
+  { name: "null stored channel, longer wins", existing: row(null, 100), incoming: "newsapi_ai", words: 400, expect: "updated" },
   { name: "null stored channel, shorter loses", existing: row(null, 400), incoming: "media_rss", words: 100, expect: "duplicate" },
 
+  // The retired 'newsdata' channel survives on one historical article. It is
+  // no longer in CHANNEL_PRIORITY, so it must rank as unknown and fall back to
+  // word count rather than being ranked against channels it never competed
+  // with — and it must never be treated as unbeatable.
+  { name: "retired newsdata channel, longer wins (falls back to word count)", existing: row("newsdata", 100), incoming: "newsapi_ai", words: 400, expect: "updated" },
+  { name: "retired newsdata channel, shorter loses (no priority shortcut)", existing: row("newsdata", 400), incoming: "media_rss", words: 100, expect: "duplicate" },
+
   // tombstones still win over everything
-  { name: "excluded tombstone survives a higher-priority channel", existing: { ...row("newsdata", 10), status: "excluded" }, incoming: "media_rss", words: 900, expect: "skipped_tombstoned" },
-  { name: "deleted tombstone survives a higher-priority channel", existing: { ...row("newsdata", 10), status: "deleted" }, incoming: "media_rss", words: 900, expect: "skipped_tombstoned" },
+  { name: "excluded tombstone survives a higher-priority channel", existing: { ...row("newsapi_ai", 10), status: "excluded" }, incoming: "media_rss", words: 900, expect: "skipped_tombstoned" },
+  { name: "deleted tombstone survives a higher-priority channel", existing: { ...row("newsapi_ai", 10), status: "deleted" }, incoming: "media_rss", words: 900, expect: "skipped_tombstoned" },
 ];
 
 /** channelForSource: the tier is the only thing distinguishing the two. */
@@ -180,7 +187,7 @@ async function main() {
   );
 
   lastUpdate = null;
-  await upsertArticle(stubClient(row("newsdata", 900)), item(50, "https://x.example/b"), match, "google_alerts");
+  await upsertArticle(stubClient(row("newsapi_ai", 900)), item(50, "https://x.example/b"), match, "google_alerts");
   const upd = lastUpdate as Record<string, unknown> | null;
   const updOk =
     upd?.source_channel === "google_alerts" &&

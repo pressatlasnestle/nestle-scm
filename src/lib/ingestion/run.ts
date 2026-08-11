@@ -20,7 +20,7 @@ export type RunType =
   | "manual"
   | "source_added"
   | "google_news_sweep"
-  | "newsdata_sweep";
+  | "newsapi_ai_sweep";
 
 export type UniverseMode = "whole_universe" | "positive_only";
 

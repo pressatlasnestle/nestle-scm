@@ -80,7 +80,7 @@ export type SourceChannel =
   | "media_rss"
   | "google_alerts"
   | "google_news_seed"
-  | "newsdata";
+  | "newsapi_ai";
 
 /**
  * Most-preferred first. The ordering is about provenance, not length:
@@ -96,19 +96,28 @@ export type SourceChannel =
  *                     headline carries a " - Publisher" suffix we have to strip
  *                     back off, the link is a Google redirect, and the body is
  *                     a snippet
- *   newsdata          an aggregator's summary. On the free tier it has no
- *                     `content` field at all, so its body is a description
+ *   newsapi_ai        an aggregator's copy. It carries the full article text,
+ *                     which the two Google channels do not — but it is still a
+ *                     third party's rendering, with the aggregator's own view
+ *                     of the byline and canonical URL, so the publisher's feed
+ *                     still wins where both have the story
  *
- * Word count therefore cannot arbitrate between channels: an aggregator that
- * pads a summary would beat the publisher's own feed on length while being
- * strictly worse as a record. Within one channel word count still decides,
- * exactly as before — a longer pull of the same story is a better pull.
+ * Word count therefore cannot arbitrate between channels: newsapi_ai returns
+ * whole articles and would beat a publisher's own summary-length RSS entry on
+ * length every time, while being the less authoritative record of the two.
+ * Within one channel word count still decides, exactly as before — a longer
+ * pull of the same story is a better pull.
+ *
+ * 'newsdata' is deliberately absent. The one article still carrying that value
+ * predates the swap to newsapi.ai and is left as historical record; channelRank
+ * returns null for it, so it falls through to the word-count rule rather than
+ * being ranked against a channel it never competed with.
  */
 const CHANNEL_PRIORITY: SourceChannel[] = [
   "media_rss",
   "google_alerts",
   "google_news_seed",
-  "newsdata",
+  "newsapi_ai",
 ];
 
 /**
