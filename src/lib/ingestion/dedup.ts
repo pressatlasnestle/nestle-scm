@@ -76,13 +76,22 @@ export function computeDedupKey(input: FingerprintInput): string {
  * Which fetch path produced an item. Recorded on the row and used to break
  * cross-channel ties.
  */
-export type SourceChannel = "media_rss" | "google_news_seed" | "newsdata";
+export type SourceChannel =
+  | "media_rss"
+  | "google_alerts"
+  | "google_news_seed"
+  | "newsdata";
 
 /**
  * Most-preferred first. The ordering is about provenance, not length:
  *
  *   media_rss         the publisher's own feed — canonical URL, real byline,
  *                     the fullest body that publisher chooses to syndicate
+ *   google_alerts     a standing Google Alerts search on a curated term. Still
+ *                     Google's summary of somebody else's story, so it loses to
+ *                     the publisher's own feed — but it is a live search
+ *                     against a term the curator chose and it carries a real
+ *                     `sources` row, so it beats both one-shot aggregator seeds
  *   google_news_seed  Google's rendering of somebody else's story: the
  *                     headline carries a " - Publisher" suffix we have to strip
  *                     back off, the link is a Google redirect, and the body is
@@ -97,6 +106,7 @@ export type SourceChannel = "media_rss" | "google_news_seed" | "newsdata";
  */
 const CHANNEL_PRIORITY: SourceChannel[] = [
   "media_rss",
+  "google_alerts",
   "google_news_seed",
   "newsdata",
 ];

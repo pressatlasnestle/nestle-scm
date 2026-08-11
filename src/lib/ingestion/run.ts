@@ -78,7 +78,25 @@ export async function getUniverseMode(
   return data?.value === "positive_only" ? "positive_only" : "whole_universe";
 }
 
-export type IngestSource = Pick<SourceRow, "id" | "name" | "rss_url">;
+export type IngestSource = Pick<SourceRow, "id" | "name" | "rss_url" | "tier">;
+
+/**
+ * The one tier value the pipeline reads rather than just displays. Google
+ * Alerts feeds are structurally ordinary Atom and fetch identically, so the
+ * tier is the only thing that distinguishes an alert entry from a publisher's
+ * own article once both are parsed FeedItems.
+ */
+const GOOGLE_ALERTS_TIER = "Alerts - Google standing search";
+
+/**
+ * Which channel a per-source fetch writes. Everything that is not a standing
+ * Google Alerts search is a publisher's own feed; a null or unrecognised tier
+ * therefore stays 'media_rss', which is what every source before these 18 was
+ * and keeps the default correct for every source added later.
+ */
+export function channelForSource(source: IngestSource): SourceChannel {
+  return source.tier === GOOGLE_ALERTS_TIER ? "google_alerts" : "media_rss";
+}
 
 export async function selectSources(
   client: IngestionClient,
@@ -86,7 +104,7 @@ export async function selectSources(
 ): Promise<IngestSource[]> {
   let query = client
     .from("sources")
-    .select("id, name, rss_url")
+    .select("id, name, rss_url, tier")
     .eq("is_active", true);
 
   query =
@@ -313,15 +331,16 @@ export async function executeRun(
         continue;
       }
 
-      // Every run type that goes through executeRun reads a curated source's
-      // own feed, so they all write the same channel.
+      // Per-source channel, not a per-run one: a single run mixes publisher
+      // feeds and Google Alerts standing searches, and they must not be
+      // labelled the same.
       await ingestItems(
         client,
         fetched.items,
         source.id,
         keywords,
         counters,
-        "media_rss"
+        channelForSource(source)
       );
     }
   }
@@ -405,7 +424,7 @@ export async function runForSource(
 ): Promise<RunSummary> {
   const { data, error } = await client
     .from("sources")
-    .select("id, name, rss_url")
+    .select("id, name, rss_url, tier")
     .eq("id", sourceId)
     .maybeSingle();
 

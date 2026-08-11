@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "ingest": "tsx --env-file=.env.local scripts/ingest.ts"
+    "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
+    "check": "npm run check:matcher && npm run check:dedup",
+    "check:matcher": "tsx scripts/checks/matcher.ts",
+    "check:dedup": "tsx scripts/checks/dedup.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
