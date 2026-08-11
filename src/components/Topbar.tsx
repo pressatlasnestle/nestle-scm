@@ -5,6 +5,10 @@ import { signOut } from "@/lib/actions/auth";
 import type { AppRole } from "@/lib/auth";
 
 const TITLES: Record<string, [string, string]> = {
+  "/articles": [
+    "Articles",
+    "Every captured story — review, exclude, or delete.",
+  ],
   "/media-universe": [
     "Media Universe",
     "Sources the ingestion pipeline reads from, and how the universe is scoped.",

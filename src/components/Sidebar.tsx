@@ -24,9 +24,16 @@ export function Sidebar({ items }: { items: NavItem[] }) {
       </div>
 
       <div className="nav-label">Workspace</div>
-      <div className="nav-item disabled" aria-disabled="true">
+      <Link
+        href="/articles"
+        className={`nav-item${
+          pathname === "/articles" || pathname.startsWith("/articles/")
+            ? " active"
+            : ""
+        }`}
+      >
         <span className="dot" /> Articles
-      </div>
+      </Link>
       <div className="nav-item disabled" aria-disabled="true">
         <span className="dot" /> Analysis
       </div>
