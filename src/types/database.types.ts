@@ -562,6 +562,10 @@ export type Database = {
     Functions: {
       can_curate: { Args: never; Returns: boolean }
       current_app_role: { Args: never; Returns: string }
+      get_integration_secret: {
+        Args: { p_provider: string }
+        Returns: string
+      }
       is_admin: { Args: never; Returns: boolean }
       is_app_user: { Args: never; Returns: boolean }
       set_integration_secret: {

@@ -6,6 +6,7 @@
  *   npm run ingest -- manual            same as scheduled, logged separately
  *   npm run ingest -- source <uuid>     one source, 7-day window
  *   npm run ingest -- google-news       one-time Google News breadth seed
+ *   npm run ingest -- newsdata          NewsData.io pass over the gap sources
  *
  * This is the one-time manual trigger for the backfill: it runs the same code
  * the cron and the route run, against the same database, so it needs
@@ -21,9 +22,10 @@ import {
   type RunSummary,
 } from "@/lib/ingestion/run";
 import { runGoogleNewsSweep } from "@/lib/ingestion/google-news";
+import { runNewsDataSweep } from "@/lib/ingestion/newsdata";
 
 const USAGE =
-  "usage: npm run ingest -- <backfill|scheduled|manual|source <uuid>|google-news>";
+  "usage: npm run ingest -- <backfill|scheduled|manual|source <uuid>|google-news|newsdata>";
 
 async function main() {
   const [command, argument] = process.argv.slice(2);
@@ -48,6 +50,9 @@ async function main() {
       break;
     case "google-news":
       summary = await runGoogleNewsSweep(client);
+      break;
+    case "newsdata":
+      summary = await runNewsDataSweep(client);
       break;
     default:
       throw new Error(USAGE);

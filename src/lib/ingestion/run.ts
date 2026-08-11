@@ -19,7 +19,8 @@ export type RunType =
   | "scheduled"
   | "manual"
   | "source_added"
-  | "google_news_sweep";
+  | "google_news_sweep"
+  | "newsdata_sweep";
 
 export type UniverseMode = "whole_universe" | "positive_only";
 

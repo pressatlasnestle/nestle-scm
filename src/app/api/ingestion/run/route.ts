@@ -10,6 +10,7 @@ import {
   type RunType,
 } from "@/lib/ingestion/run";
 import { runGoogleNewsSweep } from "@/lib/ingestion/google-news";
+import { runNewsDataSweep } from "@/lib/ingestion/newsdata";
 
 /**
  * The single entry point for every ingestion run.
@@ -37,6 +38,7 @@ const RUN_TYPES: RunType[] = [
   "manual",
   "source_added",
   "google_news_sweep",
+  "newsdata_sweep",
 ];
 
 function secretMatches(provided: string | null): boolean {
@@ -104,7 +106,9 @@ export async function POST(request: Request) {
             ? await runManual(client)
             : runType === "google_news_sweep"
               ? await runGoogleNewsSweep(client)
-              : await runForSource(client, body.sourceId as string);
+              : runType === "newsdata_sweep"
+                ? await runNewsDataSweep(client)
+                : await runForSource(client, body.sourceId as string);
 
     return NextResponse.json(summary);
   } catch (err) {
