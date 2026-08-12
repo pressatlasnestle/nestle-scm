@@ -26,8 +26,9 @@ import {
 import {
   analysable,
   countPolarity,
-  keywordBubbles,
-  limitBubbles,
+  dominantPolarity,
+  limitWords,
+  wordCloudWords,
   overview,
   polarityBreakdown,
   setAside,
@@ -39,7 +40,7 @@ import {
 } from "../../src/lib/analysis/week-stats";
 import { toCsv } from "../../src/lib/analysis/csv";
 import {
-  KEYWORD_BUBBLE_COLUMNS,
+  WORD_CLOUD_COLUMNS,
   polarityColumns,
   STORY_COLUMNS,
   themeColumns,
@@ -248,66 +249,76 @@ async function main() {
     `  ${polarityOk ? "PASS" : "FAIL"}  favourable lists hold only favourable tiers, and vice versa`
   );
 
-  // --- Keyword bubbles -----------------------------------------------------
-  const bubbles = keywordBubbles(coded);
-  const shown = limitBubbles(bubbles, 8);
+  // --- Word cloud ----------------------------------------------------------
+  const words = wordCloudWords(coded);
+  const drawn = limitWords(words, 60);
 
-  console.log(
-    `\nKEYWORD BUBBLES: ${bubbles.length} (keyword × theme) cells, ${shown.length} plotted`
-  );
-  for (const b of shown.filter((x) => x.rank <= 3).slice(0, 12)) {
+  console.log(`\nWORD CLOUD: ${words.length} keywords, ${drawn.length} drawn`);
+  for (const w of drawn.slice(0, 10)) {
     console.log(
-      `  #${b.rank}  ${b.keyword.padEnd(26)} ${b.theme.padEnd(30)} ${String(b.mentions).padStart(4)} mentions  ${b.articles} articles`
+      `  ${w.keyword.slice(0, 40).padEnd(42)} ${String(w.mentions).padStart(4)} mentions  ` +
+        `${String(w.articles).padStart(3)} articles  ${w.sentiment.padEnd(12)}` +
+        `  (F ${w.weights.favourable} / N ${w.weights.neutral} / U ${w.weights.unfavourable})`
     );
   }
 
-  // Ranks within a theme must be 1..n with no gaps or repeats, or the y axis
-  // would have holes and two bubbles would overlap exactly.
-  let rankShapeOk = true;
-  let descOk = true;
-  const themesInBubbles = [...new Set(bubbles.map((b) => b.theme))];
-  for (const t of themesInBubbles) {
-    const col = bubbles.filter((b) => b.theme === t).sort((a, b) => a.rank - b.rank);
-    if (col.some((b, i) => b.rank !== i + 1)) rankShapeOk = false;
-    if (col.some((b, i) => i > 0 && col[i - 1].mentions < b.mentions)) descOk = false;
-  }
-  console.log(
-    `  ${rankShapeOk ? "PASS" : "FAIL"}  every theme's ranks are 1..n with no gaps or ties`
+  // Size ordering drives centre-out placement — the layout is fed this array in
+  // order, so a break here would put a small word in the middle.
+  const wordsSortedOk = words.every(
+    (w, i) => i === 0 || words[i - 1].mentions >= w.mentions
   );
-  console.log(`  ${descOk ? "PASS" : "FAIL"}  ranks descend by mentions within each theme`);
+  console.log(`  ${wordsSortedOk ? "PASS" : "FAIL"}  words are ordered biggest-first`);
 
-  // Every bubble's theme must be a theme that exists in the theme chart, and
-  // every article behind it must be in the coded set — the bubble chart must
-  // not reach data the other charts exclude.
-  const themeNames = new Set(themes.map((t) => t.theme));
-  const strayTheme = bubbles.filter((b) => !themeNames.has(b.theme));
+  // Each word's three weights must account for its whole size, or the colour is
+  // being decided from a different number than the one drawn.
+  const weightsOk = words.every(
+    (w) =>
+      w.weights.favourable + w.weights.neutral + w.weights.unfavourable === w.mentions
+  );
   console.log(
-    `  ${strayTheme.length === 0 ? "PASS" : "FAIL"}  every bubble's theme also appears in the theme chart` +
-      (strayTheme.length ? ` (${strayTheme.length} stray)` : "")
+    `  ${weightsOk ? "PASS" : "FAIL"}  each word's F/N/U weights sum to its total mentions`
   );
 
-  // Independent recomputation of one cell, straight from the rows, to confirm
-  // the grouping is doing what it claims rather than merely being self-consistent.
-  if (bubbles.length > 0) {
-    const probe = bubbles[0];
-    const contributing = coded.filter(
-      (r) =>
-        (r.ai_themes ?? []).some((t) => t.trim() === probe.theme) &&
-        (r.matched_keywords ?? []).some((k) => k.trim() === probe.keyword)
-    );
-    const expectedMentions = contributing.reduce(
-      (n, r) => n + (r.keyword_mention_count ?? 0),
-      0
-    );
-    const cellOk =
-      contributing.length === probe.articles && expectedMentions === probe.mentions;
-    console.log(
-      `  ${cellOk ? "PASS" : "FAIL"}  recomputed "${probe.keyword}" × "${probe.theme}" from rows ` +
-        `→ ${contributing.length} articles / ${expectedMentions} mentions ` +
-        `(bubble says ${probe.articles} / ${probe.mentions})`
-    );
-    if (!cellOk) rankShapeOk = false;
-  }
+  // The colour rule, re-derived from the weights rather than trusted.
+  const colourOk = words.every((w) => dominantPolarity(w.weights) === w.sentiment);
+  console.log(
+    `  ${colourOk ? "PASS" : "FAIL"}  every word's colour matches the rule applied to its own weights`
+  );
+
+  // A word whose coverage is entirely one-sided MUST take that colour — the
+  // case the rule exists for, and the one a plurality bug would break first.
+  const oneSided = words.filter(
+    (w) =>
+      (w.weights.favourable > 0 &&
+        w.weights.neutral === 0 &&
+        w.weights.unfavourable === 0) ||
+      (w.weights.unfavourable > 0 &&
+        w.weights.favourable === 0 &&
+        w.weights.neutral === 0)
+  );
+  const oneSidedOk = oneSided.every((w) =>
+    w.weights.favourable > 0
+      ? w.sentiment === "favourable"
+      : w.sentiment === "unfavourable"
+  );
+  console.log(
+    `  ${oneSidedOk ? "PASS" : "FAIL"}  all ${oneSided.length} wholly one-sided keyword(s) take that side's colour, never grey`
+  );
+
+  // ...and an exact tie must be grey, checked directly on the rule.
+  const tieGrey =
+    dominantPolarity({ favourable: 9, neutral: 0, unfavourable: 9 }) === "neutral" &&
+    dominantPolarity({ favourable: 0, neutral: 0, unfavourable: 0 }) === "neutral" &&
+    dominantPolarity({ favourable: 10, neutral: 9, unfavourable: 9 }) === "favourable";
+  console.log(
+    `  ${tieGrey ? "PASS" : "FAIL"}  exact tie → neutral; empty → neutral; plurality of 1 → wins`
+  );
+
+  // No keyword may be counted more times than there are coded articles.
+  const overCounted = words.filter((w) => w.articles > coded.length);
+  console.log(
+    `  ${overCounted.length === 0 ? "PASS" : "FAIL"}  no keyword claims more articles than exist (${coded.length} coded)`
+  );
 
   // --- The exports, byte for byte ------------------------------------------
   // Built from the SAME column definitions the download buttons use, so this
@@ -334,11 +345,11 @@ async function main() {
       `(first line: ${storyCsv.split("\r\n")[1]?.slice(0, 90) ?? "(none)"}…)`
   );
 
-  const bubbleCsv = toCsv(bubbles, KEYWORD_BUBBLE_COLUMNS);
+  const wordCsv = toCsv(words, WORD_CLOUD_COLUMNS);
   console.log(
-    `CSV — keywords: ${bubbles.length} rows (FULL set, not the ${shown.length} plotted)`
+    `CSV — keywords: ${words.length} rows (FULL set, not the ${drawn.length} drawn)`
   );
-  console.log(`  ${bubbleCsv.split("\r\n").slice(0, 4).join("\n  ")}`);
+  console.log(`  ${wordCsv.split("\r\n").slice(0, 5).join("\n  ")}`);
 
   await supabase.auth.signOut();
 
@@ -358,9 +369,12 @@ async function main() {
     rankOk &&
     themeOk &&
     polarityOk &&
-    rankShapeOk &&
-    descOk &&
-    strayTheme.length === 0;
+    wordsSortedOk &&
+    weightsOk &&
+    colourOk &&
+    oneSidedOk &&
+    tieGrey &&
+    overCounted.length === 0;
   process.exit(ok ? 0 : 1);
 }
 

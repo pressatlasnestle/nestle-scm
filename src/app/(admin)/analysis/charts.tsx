@@ -10,23 +10,18 @@ import {
   Pie,
   PieChart,
   ResponsiveContainer,
-  Scatter,
-  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
-  ZAxis,
 } from "recharts";
 import type { Week } from "@/lib/analysis/week-period";
 import type {
-  KeywordBubble,
   PolarityShare,
   ThemeStat,
   VolumeDay,
 } from "@/lib/analysis/week-stats";
 import { csvFilename, downloadCsv } from "@/lib/analysis/csv";
 import {
-  KEYWORD_BUBBLE_COLUMNS,
   polarityColumns,
   themeColumns,
   VOLUME_COLUMNS,
@@ -38,8 +33,12 @@ import { ChartCard } from "./ChartCard";
  *
  * Favourable/Neutral/Unfavourable are teal/amber/coral, the panel's three
  * accent colours, used here in that fixed order so a reader who learns the
- * mapping on one chart carries it to every other one — including the
- * per-theme breakdown and the bubble chart.
+ * mapping on one chart carries it to every other one.
+ *
+ * The word cloud is the one deliberate exception: it uses the same teal and
+ * coral but swaps amber for a muted grey, because there neutral means "no
+ * dominant direction" rather than "a neutral reading", and amber on a dense
+ * field of words reads as a third opinion rather than as an absence of one.
  */
 export const POLARITY_COLOR = {
   favourable: "var(--teal)",
@@ -425,171 +424,6 @@ export function ThemePolarityChart({
             isAnimationActive={false}
           />
         </BarChart>
-      </ResponsiveContainer>
-    </ChartCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Keyword bubbles
-// ---------------------------------------------------------------------------
-
-/**
- * Keywords by theme.
- *
- *   x = theme (categorical)
- *   y = frequency rank within that theme, 1 at the top
- *   size = total mentions
- *
- * Rank rather than raw mentions on the y axis is what makes the themes
- * comparable: a busy theme and a quiet one both start at rank 1, so the reader
- * compares each theme's own leaderboard side by side instead of having every
- * quiet theme squashed into the bottom of a shared scale. Magnitude has not
- * been thrown away — it is the bubble size, and it is on the tooltip.
- */
-export function KeywordBubbleChart({
-  week,
-  bubbles,
-  shown,
-  perTheme,
-}: {
-  week: Week;
-  /** The full set. Exported whole. */
-  bubbles: KeywordBubble[];
-  /** The trimmed set actually plotted. */
-  shown: KeywordBubble[];
-  perTheme: number;
-}) {
-  // Theme order matches the pie and the per-theme bars: busiest first, by total
-  // mentions here since that is what this chart measures.
-  const themeOrder = [...new Set(shown.map((b) => b.theme))].sort((a, b) => {
-    const sum = (t: string) =>
-      shown.filter((x) => x.theme === t).reduce((n, x) => n + x.mentions, 0);
-    return sum(b) - sum(a) || a.localeCompare(b);
-  });
-
-  const data = shown.map((b) => ({
-    ...b,
-    x: themeOrder.indexOf(b.theme),
-    y: b.rank,
-    short: b.theme.length > 18 ? `${b.theme.slice(0, 17)}…` : b.theme,
-  }));
-
-  const maxRank = Math.max(1, ...data.map((d) => d.y));
-  const hidden = bubbles.length - shown.length;
-
-  function exportCsv() {
-    // The FULL set, not `shown` — see KEYWORD_BUBBLE_COLUMNS.
-    downloadCsv(
-      csvFilename("keywords", week.isoLabel),
-      bubbles,
-      KEYWORD_BUBBLE_COLUMNS
-    );
-  }
-
-  return (
-    <ChartCard
-      title="Keywords by theme"
-      hint={
-        <>
-          The top {perTheme} keywords in each theme. Height is the keyword&apos;s
-          rank within its own theme, size is total mentions. A keyword appears
-          under every theme it turns up in — that is a real overlap, not a
-          duplicate.
-          {hidden > 0 && (
-            <>
-              {" "}
-              <strong>{hidden} lower-ranked</strong> keyword
-              {hidden === 1 ? "" : "s"} are not plotted; the CSV has all{" "}
-              {bubbles.length}.
-            </>
-          )}
-        </>
-      }
-      onExport={exportCsv}
-      empty={
-        bubbles.length === 0
-          ? "No coded article in this week has both a theme and a matched keyword."
-          : undefined
-      }
-    >
-      <ResponsiveContainer width="100%" height={Math.max(300, 34 * maxRank + 110)}>
-        <ScatterChart margin={{ top: 12, right: 24, bottom: 46, left: 0 }}>
-          <CartesianGrid stroke="var(--line-soft)" />
-          <XAxis
-            type="number"
-            dataKey="x"
-            domain={[-0.5, themeOrder.length - 0.5]}
-            ticks={themeOrder.map((_, i) => i)}
-            tickFormatter={(i: number) => {
-              const name = themeOrder[i] ?? "";
-              return name.length > 18 ? `${name.slice(0, 17)}…` : name;
-            }}
-            tick={{ ...AXIS, fontFamily: "var(--font-body)", fontSize: 11 }}
-            tickLine={false}
-            axisLine={false}
-            angle={-18}
-            textAnchor="end"
-            interval={0}
-          />
-          <YAxis
-            type="number"
-            dataKey="y"
-            // Reversed so rank 1 sits at the top, which is the only way round
-            // a "leaderboard" reads.
-            reversed
-            domain={[0.5, maxRank + 0.5]}
-            allowDecimals={false}
-            tick={AXIS}
-            tickLine={false}
-            axisLine={false}
-            width={40}
-            label={{
-              value: "rank in theme",
-              angle: -90,
-              position: "insideLeft",
-              style: { fill: "var(--text-dim)", fontSize: 10.5 },
-            }}
-          />
-          <ZAxis type="number" dataKey="mentions" range={[60, 900]} />
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            cursor={{ strokeDasharray: "3 3", stroke: "var(--line)" }}
-            content={({ active, payload }) => {
-              if (!active || !payload?.length) return null;
-              const b = payload[0].payload as KeywordBubble;
-              return (
-                <div style={{ ...TOOLTIP_STYLE, padding: "9px 12px" }}>
-                  <div style={{ fontWeight: 600 }}>{b.keyword}</div>
-                  <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                    {b.theme}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11.5,
-                      marginTop: 5,
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    #{b.rank} in theme · {b.mentions} mentions · {b.articles}{" "}
-                    article{b.articles === 1 ? "" : "s"}
-                  </div>
-                </div>
-              );
-            }}
-          />
-          <Scatter data={data} isAnimationActive={false}>
-            {data.map((d) => (
-              <Cell
-                key={`${d.theme}|${d.keyword}`}
-                fill={THEME_COLORS[d.x % THEME_COLORS.length]}
-                fillOpacity={0.55}
-                stroke={THEME_COLORS[d.x % THEME_COLORS.length]}
-              />
-            ))}
-          </Scatter>
-        </ScatterChart>
       </ResponsiveContainer>
     </ChartCard>
   );

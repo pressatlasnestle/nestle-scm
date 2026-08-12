@@ -9,8 +9,8 @@ import {
 } from "@/lib/analysis/week-period";
 import {
   analysable,
-  keywordBubbles,
-  limitBubbles,
+  limitWords,
+  wordCloudWords,
   overview,
   polarityBreakdown,
   storiesForTopThemes,
@@ -38,10 +38,12 @@ const WEEK_CHOICES = 12;
 const MAX_WEEK_ROWS = 2000;
 
 /**
- * Keywords plotted per theme in the bubble chart. Purely a legibility limit —
- * the CSV export carries every bubble, and the chart says how many it dropped.
+ * Words drawn in the cloud. Purely a legibility limit — past roughly this many
+ * the smallest words are unreadable and d3-cloud starts dropping them silently
+ * anyway, which is worse than trimming deliberately and saying so. The CSV
+ * export always carries the full set.
  */
-const BUBBLES_PER_THEME = 8;
+const WORDS_IN_CLOUD = 60;
 
 type SearchParams = { week?: string };
 
@@ -95,7 +97,7 @@ export default async function AnalysisPage({
   const coded = analysable(rows);
   const themes = themeStats(coded);
   const top = topThemes(themes, NARRATIVE_THEME_COUNT);
-  const bubbles = keywordBubbles(coded);
+  const words = wordCloudWords(coded);
 
   return (
     <AnalysisView
@@ -105,9 +107,8 @@ export default async function AnalysisPage({
       volume={volumeByDay(rows, weekDays(week))}
       polarity={polarityBreakdown(coded)}
       themes={themes}
-      bubbles={bubbles}
-      bubblesShown={limitBubbles(bubbles, BUBBLES_PER_THEME)}
-      bubblesPerTheme={BUBBLES_PER_THEME}
+      words={words}
+      wordsShown={limitWords(words, WORDS_IN_CLOUD)}
       stories={storiesForTopThemes(coded, top)}
       narrative={parseStoredNarrative(report?.analysis_narrative)}
       narrativeGeneratedAt={report?.analysis_generated_at ?? null}

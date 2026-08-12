@@ -390,114 +390,6 @@ export type ThemeStories = {
   negative: RankedStory[];
 };
 
-// ---------------------------------------------------------------------------
-// Keywords by theme
-// ---------------------------------------------------------------------------
-
-export type KeywordBubble = {
-  keyword: string;
-  theme: string;
-  /** Summed keyword_mention_count over the articles in this (keyword, theme) cell. */
-  mentions: number;
-  /** How many articles contributed. */
-  articles: number;
-  /** 1 = most-mentioned keyword within this theme. The y position. */
-  rank: number;
-};
-
-/**
- * Keyword volume, grouped by theme.
- *
- * A keyword appears under EVERY theme it shows up in, as its own bubble. That
- * is the intended behaviour, not a duplicate: "Suez" appearing in both
- * `Chokepoints & routing` and `Service network changes` is a real fact about
- * the week, and collapsing it to whichever theme happened to be first would
- * assert a single home the data does not have.
- *
- * The consequence, stated plainly because the chart cannot: summing the
- * `mentions` column across all bubbles double-counts any article that carries
- * more than one theme. Within a single theme's column the totals are sound,
- * which is the comparison the chart is actually for.
- *
- * ATTRIBUTION. keyword_mention_count is per ARTICLE, not per keyword — it is
- * the total number of tracked-term hits in that article's text (migration
- * 0018), and there is no per-keyword breakdown stored anywhere. So an article
- * matching three keywords contributes its full count to each of them. This
- * overstates any individual keyword and is the only option the stored data
- * supports; dividing the count evenly between matched keywords would invent a
- * precision that does not exist. Bubble size is therefore a measure of "how
- * prominent were the articles this keyword appeared in", which is a defensible
- * thing to size on and is NOT "how many times this keyword was written".
- */
-type BubbleCell = {
-  keyword: string;
-  theme: string;
-  mentions: number;
-  articles: number;
-};
-
-export function keywordBubbles(coded: WeekArticle[]): KeywordBubble[] {
-  // (theme, keyword) -> accumulator
-  const cells = new Map<string, BubbleCell>();
-
-  for (const row of coded) {
-    const themes = (row.ai_themes ?? []).map((t) => t.trim()).filter(Boolean);
-    const keywords = [
-      ...new Set((row.matched_keywords ?? []).map((k) => k.trim()).filter(Boolean)),
-    ];
-    if (themes.length === 0 || keywords.length === 0) continue;
-
-    const mentions = row.keyword_mention_count ?? 0;
-
-    for (const theme of themes) {
-      for (const keyword of keywords) {
-        const key = `${theme} ${keyword}`;
-        const cell = cells.get(key);
-        if (cell) {
-          cell.mentions += mentions;
-          cell.articles += 1;
-        } else {
-          cells.set(key, { keyword, theme, mentions, articles: 1 });
-        }
-      }
-    }
-  }
-
-  // Rank within each theme, most-mentioned first. Ties break on keyword name so
-  // the y positions are stable between renders rather than depending on Map
-  // insertion order.
-  const byTheme = new Map<string, BubbleCell[]>();
-  for (const cell of cells.values()) {
-    const bucket = byTheme.get(cell.theme);
-    if (bucket) bucket.push(cell);
-    else byTheme.set(cell.theme, [cell]);
-  }
-
-  const out: KeywordBubble[] = [];
-  for (const bucket of byTheme.values()) {
-    bucket
-      .sort((a, b) => b.mentions - a.mentions || a.keyword.localeCompare(b.keyword))
-      .forEach((cell, i) => out.push({ ...cell, rank: i + 1 }));
-  }
-
-  return out;
-}
-
-/**
- * Trims each theme's column to its top `perTheme` keywords.
- *
- * A week can produce hundreds of (keyword, theme) cells and a bubble chart
- * stops being readable long before that. Truncation is never silent — the
- * chart's caption reports how many bubbles were dropped, and the CSV export
- * carries the FULL set, so the limit is a display decision rather than a data
- * one.
- */
-export function limitBubbles(
-  bubbles: KeywordBubble[],
-  perTheme: number
-): KeywordBubble[] {
-  return bubbles.filter((b) => b.rank <= perTheme);
-}
 
 /** Top 3 favourable and top 3 unfavourable stories for each of the top themes. */
 export function storiesForTopThemes(
@@ -510,4 +402,121 @@ export function storiesForTopThemes(
     positive: topStories(coded, t.theme, "favourable"),
     negative: topStories(coded, t.theme, "unfavourable"),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Keyword word cloud
+// ---------------------------------------------------------------------------
+
+export type WordCloudWord = {
+  keyword: string;
+  /** Word size. Total keyword_mention_count over the articles carrying it. */
+  mentions: number;
+  /** How many coded articles contributed. */
+  articles: number;
+  /** Word colour. See dominantPolarity() for the exact rule. */
+  sentiment: Polarity;
+  /** The weights the colour was decided from, so the call is auditable. */
+  weights: PolarityCounts;
+};
+
+/**
+ * THE COLOUR RULE, stated exactly, because it is a judgement and not a
+ * defined metric.
+ *
+ *   * Each coded article carrying the keyword contributes its OWN
+ *     keyword_mention_count into the bucket of its own favourability:
+ *     favourable (Favourable + Very favourable), neutral, or unfavourable
+ *     (Unfavourable + Very unfavourable).
+ *   * The bucket with the strictly highest weight wins, and gives the word its
+ *     colour: green for favourable, red for unfavourable, grey for neutral.
+ *   * An exact tie for the top weight → grey. Not "whichever we saw first",
+ *     and not a coin flip: a keyword whose coverage is exactly balanced has no
+ *     dominant direction, and grey is what "no dominant direction" looks like
+ *     everywhere else on this panel.
+ *
+ * Weighted by mentions rather than by article count on purpose: an article
+ * that mentions the tracked term twenty times is more about that term than one
+ * that mentions it once, and colouring by a headcount of articles would let a
+ * pile of passing references outvote the coverage that is genuinely about it.
+ *
+ * PLURALITY, NOT AN ABSOLUTE MAJORITY. The winner needs only to be the largest
+ * of the three, not to exceed half. With three buckets an absolute majority is
+ * frequently absent, and demanding one would render most words grey and throw
+ * away the signal the chart exists to show. The cost is that a 40/35/25 split
+ * reads as green when it is genuinely mixed — which is why `weights` is
+ * carried on every word and exported in the CSV, so the split behind any
+ * colour can be inspected rather than taken on trust.
+ */
+export function dominantPolarity(weights: PolarityCounts): Polarity {
+  const ranked = POLARITIES.map((p) => ({ p, w: weights[p] })).sort(
+    (a, b) => b.w - a.w
+  );
+  if (ranked[0].w === 0) return "neutral"; // nothing to go on
+  if (ranked[0].w === ranked[1].w) return "neutral"; // exact tie
+  return ranked[0].p;
+}
+
+/**
+ * One entry per keyword across the whole week, collapsed over themes.
+ *
+ * Deliberately NOT grouped by theme, which is what the chart this replaces
+ * did. Splitting by theme meant an article carrying three themes counted its
+ * keyword three times, so the sizes described tagging as much as coverage.
+ * Collapsing counts each article exactly once per keyword, which makes
+ * `mentions` a number that can be stated plainly: the total tracked-term hits
+ * in the articles this keyword appeared in.
+ *
+ * Sorted by mentions, because the layout places words in the order it is given
+ * them — biggest first is what puts the heaviest words at the centre.
+ */
+export function wordCloudWords(coded: WeekArticle[]): WordCloudWord[] {
+  const acc = new Map<
+    string,
+    { mentions: number; articles: number; weights: PolarityCounts }
+  >();
+
+  for (const row of coded) {
+    const polarity = polarityOf(row.ai_sentiment);
+    if (!polarity) continue;
+    const mentions = row.keyword_mention_count ?? 0;
+
+    // Deduped per article: a keyword listed twice on one row is one appearance,
+    // or the article would count itself twice into its own bucket.
+    const keywords = [
+      ...new Set((row.matched_keywords ?? []).map((k) => k.trim()).filter(Boolean)),
+    ];
+
+    for (const keyword of keywords) {
+      const cell = acc.get(keyword) ?? {
+        mentions: 0,
+        articles: 0,
+        weights: emptyPolarityCounts(),
+      };
+      cell.mentions += mentions;
+      cell.articles += 1;
+      cell.weights[polarity] += mentions;
+      acc.set(keyword, cell);
+    }
+  }
+
+  return [...acc.entries()]
+    .map(([keyword, cell]) => ({
+      keyword,
+      mentions: cell.mentions,
+      articles: cell.articles,
+      sentiment: dominantPolarity(cell.weights),
+      weights: cell.weights,
+    }))
+    // Ties break on keyword so the layout is stable between renders; a cloud
+    // that reshuffled on refresh would be unreadable.
+    .sort((a, b) => b.mentions - a.mentions || a.keyword.localeCompare(b.keyword));
+}
+
+/**
+ * Trims to the top `limit` words for legibility. Never silent — the chart
+ * reports how many were dropped, and the CSV always exports the full set.
+ */
+export function limitWords(words: WordCloudWord[], limit: number): WordCloudWord[] {
+  return words.slice(0, limit);
 }

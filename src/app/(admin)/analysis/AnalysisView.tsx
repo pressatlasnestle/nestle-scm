@@ -1,10 +1,11 @@
 "use client";
 
 import { useTransition, type CSSProperties, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { Week } from "@/lib/analysis/week-period";
 import type {
-  KeywordBubble,
+  WordCloudWord,
   PolarityShare,
   ThemeStat,
   ThemeStories,
@@ -13,13 +14,40 @@ import type {
 } from "@/lib/analysis/week-stats";
 import type { WeekNarrative } from "@/lib/analysis/narrative";
 import {
-  KeywordBubbleChart,
   PolarityChart,
   ThemePieChart,
   ThemePolarityChart,
   VolumeChart,
 } from "./charts";
 import { NarrativePanel } from "./NarrativePanel";
+
+/**
+ * Client-only, and that is load-bearing rather than an optimisation.
+ *
+ * The cloud's layout comes from d3-cloud, which measures glyph widths by
+ * writing to a <canvas>. "use client" does not mean client-ONLY — Next.js
+ * still server-renders client components to produce the initial HTML — so a
+ * plain import crashes the server render with `document is not defined`.
+ * ssr:false keeps it out of that pass entirely.
+ *
+ * Legal here only because AnalysisView is itself a client component; Next 15
+ * rejects ssr:false inside a Server Component.
+ */
+const WordCloud = dynamic(
+  () => import("./WordCloud").then((m) => m.WordCloud),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="chart-card">
+        <div className="chart-body">
+          <div className="empty-state">
+            <div className="empty-sub">Laying out keywords…</div>
+          </div>
+        </div>
+      </div>
+    ),
+  }
+);
 
 const selectStyle: CSSProperties = {
   background: "var(--panel-raised)",
@@ -60,9 +88,8 @@ export function AnalysisView({
   volume,
   polarity,
   themes,
-  bubbles,
-  bubblesShown,
-  bubblesPerTheme,
+  words,
+  wordsShown,
   stories,
   narrative,
   narrativeGeneratedAt,
@@ -77,9 +104,8 @@ export function AnalysisView({
   volume: VolumeDay[];
   polarity: PolarityShare[];
   themes: ThemeStat[];
-  bubbles: KeywordBubble[];
-  bubblesShown: KeywordBubble[];
-  bubblesPerTheme: number;
+  words: WordCloudWord[];
+  wordsShown: WordCloudWord[];
   stories: ThemeStories[];
   narrative: WeekNarrative | null;
   narrativeGeneratedAt: string | null;
@@ -213,15 +239,10 @@ export function AnalysisView({
             />
           </div>
 
-          {/* Full width: the bubble chart needs the horizontal room for one
-              column per theme, so it sits outside the two-up grid. */}
+          {/* Full width: a cloud needs the horizontal room to pack around its
+              centre, so it sits outside the two-up grid. */}
           <div style={{ marginBottom: 18 }}>
-            <KeywordBubbleChart
-              week={week}
-              bubbles={bubbles}
-              shown={bubblesShown}
-              perTheme={bubblesPerTheme}
-            />
+            <WordCloud week={week} words={words} shown={wordsShown} />
           </div>
 
           <NarrativePanel

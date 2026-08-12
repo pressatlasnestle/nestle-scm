@@ -12,7 +12,7 @@
 
 import type { CsvColumn } from "./csv";
 import type {
-  KeywordBubble,
+  WordCloudWord,
   PolarityShare,
   RankedStory,
   ThemeStat,
@@ -85,18 +85,21 @@ export const STORY_COLUMNS: CsvColumn<StoryExportRow>[] = [
   { header: "summary", value: (s) => s.summary },
 ];
 
+
 /**
- * Keyword bubbles. Exported UNTRIMMED — the chart shows the top few keywords
- * per theme for legibility, but the CSV is the full set, because the whole
- * point of exporting is to get at what the chart could not fit.
+ * Keyword word cloud. Exported UNTRIMMED — the chart draws only the top slice
+ * for legibility, and the point of an export is to reach what it could not fit.
  *
- * `rank_in_theme` travels with each row so the chart's y position is
- * reconstructable from the file alone.
+ * The three weight columns are the evidence behind `dominant_sentiment`.
+ * Without them the colour is an assertion; with them a reader can see that a
+ * green word was 40/35/25 rather than 90/5/5 and judge it themselves.
  */
-export const KEYWORD_BUBBLE_COLUMNS: CsvColumn<KeywordBubble>[] = [
-  { header: "keyword", value: (b) => b.keyword },
-  { header: "theme", value: (b) => b.theme },
-  { header: "total_mentions", value: (b) => b.mentions },
-  { header: "article_count", value: (b) => b.articles },
-  { header: "rank_in_theme", value: (b) => b.rank },
+export const WORD_CLOUD_COLUMNS: CsvColumn<WordCloudWord>[] = [
+  { header: "keyword", value: (w) => w.keyword },
+  { header: "total_mentions", value: (w) => w.mentions },
+  { header: "dominant_sentiment", value: (w) => w.sentiment },
+  { header: "article_count", value: (w) => w.articles },
+  { header: "weight_favourable", value: (w) => w.weights.favourable },
+  { header: "weight_neutral", value: (w) => w.weights.neutral },
+  { header: "weight_unfavourable", value: (w) => w.weights.unfavourable },
 ];
