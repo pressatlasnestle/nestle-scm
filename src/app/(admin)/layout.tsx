@@ -9,6 +9,7 @@ import { ToastProvider } from "@/components/Toast";
 const ALL_ITEMS: (NavItem & { adminOnly: boolean })[] = [
   { label: "Media Universe", href: "/media-universe", adminOnly: false },
   { label: "Keywords", href: "/keywords", adminOnly: false },
+  { label: "Themes", href: "/themes", adminOnly: false },
   { label: "Users & Roles", href: "/users", adminOnly: true },
   { label: "Integrations", href: "/integrations", adminOnly: true },
   { label: "Recipients", href: "/recipients", adminOnly: false },

@@ -55,8 +55,24 @@ this seat and no other: a freight-rate increase is UNFAVOURABLE here even
 though a carrier's shareholders would welcome it, and overcapacity that
 depresses rates is FAVOURABLE here even though it hurts carrier margins.`;
 
-const SYSTEM = `You are coding ocean-freight news articles for a media
-intelligence corpus. You do two things: judge tone, and name themes.
+function buildSystemPrompt(themes: ThemeOption[]): string {
+  const catalogue = themes
+    .map((t) => `- ${t.name}: ${t.description ?? "(no guidance supplied)"}`)
+    .join("\n");
+
+  return `You are coding ocean-freight news articles for a media intelligence
+corpus. You do three things: assign themes, judge tone, and write a summary.
+
+THEMES. Assign 1-3 themes from the fixed list below, most important first.
+
+You may ONLY use these exact names. The list is the vocabulary; there is no
+option to invent one. Each entry states what the bucket means and where its
+boundaries lie — read the guidance, do not pattern-match the name.
+
+${catalogue}
+
+Assign a second or third theme only when the article genuinely spans them.
+Two weakly-relevant themes are worse than one accurate one.
 
 TONE. Judge sentiment from the point of view of ${PERSPECTIVE}
 
@@ -66,48 +82,56 @@ update — and that disagreement is information, so do not average them yourself
 Use 'neutral' for genuinely balanced, factual or mixed content; do not use it as
 a hedge when the direction is clear.
 
-THEMES. Give 1-3 short noun phrases naming what this article is ABOUT.
+SUMMARY. Write 2-3 sentences a newsletter curator can paste in unedited.
 
-Themes exist to group articles into storylines, so they are worthless unless
-they are reused across articles covering the same story. Follow these rules:
+  * Report what happened. Lead with the fact, not the article.
+  * NEVER write "this article discusses", "the piece reports", "according to
+    the report", or any other framing that refers to the coverage rather than
+    the event. The reader wants the news, not a description of a news story.
+  * No editorialising, no adjectives of judgement, no advice, no speculation
+    beyond what the source states.
+  * Keep the specifics that make it useful: named carriers, ports, routes,
+    figures, percentages, dates, effective-from timings.
+  * Plain declarative prose. No bullet points, no headline-style fragments.
+  * If the source is only a headline with no body, write one factual sentence
+    from it rather than padding to three.`;
+}
 
-  * Name the specific ongoing situation, not the broad category. "Red Sea
-    return" — not "chokepoints". "Panama Canal draft restrictions" — not
-    "routing".
-  * Use the conventional industry name for it, the phrase a trade journalist
-    would use. Two articles on the same story must land on the same phrase.
-  * 2-5 words. No dates, no numbers, no carrier-specific detail unless the
-    carrier IS the story.
-  * Lowercase unless a proper noun requires otherwise.
-  * Prefer an existing conventional phrase over inventing a new one.
-
-Give the most important theme first.`;
-
-const SCHEMA: JsonSchema = {
-  type: "OBJECT",
-  properties: {
-    // Themes first: naming what the article is about before judging its tone
-    // steadies the sentiment call, the same way sorting generates its
-    // reasoning before its verdict. Costs nothing extra, since themes are
-    // stored anyway.
-    themes: {
-      type: "ARRAY",
-      items: { type: "STRING" },
-      minItems: 1,
-      maxItems: 3,
+function buildSchema(themes: ThemeOption[]): JsonSchema {
+  return {
+    type: "OBJECT",
+    properties: {
+      // Themes first: naming what the article is about before judging its tone
+      // and writing its summary steadies both, the same way sorting generates
+      // its reasoning before its verdict.
+      themes: {
+        type: "ARRAY",
+        // The closed vocabulary, enforced by the API rather than by the
+        // prompt. This is the whole point: an off-list theme is not
+        // discouraged, it is unrepresentable in the response.
+        items: { type: "STRING", enum: themes.map((t) => t.name) },
+        minItems: 1,
+        maxItems: 3,
+      },
+      headline_sentiment: {
+        type: "STRING",
+        enum: ["positive", "neutral", "negative"],
+      },
+      body_sentiment: {
+        type: "STRING",
+        enum: ["positive", "neutral", "negative"],
+      },
+      summary: { type: "STRING" },
     },
-    headline_sentiment: {
-      type: "STRING",
-      enum: ["positive", "neutral", "negative"],
-    },
-    body_sentiment: {
-      type: "STRING",
-      enum: ["positive", "neutral", "negative"],
-    },
-  },
-  required: ["themes", "headline_sentiment", "body_sentiment"],
-  propertyOrdering: ["themes", "headline_sentiment", "body_sentiment"],
-};
+    required: ["themes", "headline_sentiment", "body_sentiment", "summary"],
+    propertyOrdering: [
+      "themes",
+      "headline_sentiment",
+      "body_sentiment",
+      "summary",
+    ],
+  };
+}
 
 export type Sentiment = "positive" | "neutral" | "negative";
 
@@ -162,78 +186,40 @@ export function sentimentTier(headline: Sentiment, body: Sentiment): SentimentTi
  * Proper-noun casing is sacrificed deliberately: a display layer can title-case
  * for presentation, but grouping needs one canonical form.
  */
-/**
- * Words that end in 's' without being plural. Stripping these would corrupt
- * the term rather than canonicalise it ("logistics" → "logistic",
- * "crisis" → "crisi", "overseas" → "oversea").
- *
- * Note the absence of 'ys': -ays words in this domain ("delays", "ways") are
- * ordinary plurals and must be singularised.
- */
-const NOT_PLURAL = /(ss|us|is|ics|ous|as)$/;
+export type ThemeOption = { name: string; description: string | null };
 
 /**
- * Singularises the final word only. Themes are noun phrases, so the head noun
- * is what varies — "supply chain disruption" and "supply chain disruptions"
- * must collapse, and doing it on the last word alone avoids mangling modifiers
- * ("rates rally" is not "rate rally").
- */
-function singulariseLastWord(phrase: string): string {
-  const words = phrase.split(" ");
-  const last = words[words.length - 1];
-  if (last.length <= 3 || NOT_PLURAL.test(last)) return phrase;
-  if (last.endsWith("ies")) words[words.length - 1] = `${last.slice(0, -3)}y`;
-  else if (last.endsWith("s")) words[words.length - 1] = last.slice(0, -1);
-  return words.join(" ");
-}
-
-export function normaliseTheme(theme: string): string {
-  const base = theme
-    .toLowerCase()
-    .replace(/[.,;:!?]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return singulariseLastWord(base);
-}
-
-/**
- * Distinct themes already in use, most frequent first.
+ * The active theme vocabulary, in a fixed order.
  *
- * Seeded into the coding prompt so each article is not named in a vacuum.
- * Without this the model reaches for a fresh phrase every time and the same
- * story fragments across "strait of hormuz crisis", "strait of hormuz risk"
- * and "strait of hormuz disruptions" — three singleton groups where there is
- * one storyline. Normalisation alone cannot fix that; only a shared vocabulary
- * can, because these are genuinely different words rather than different
- * spellings.
+ * Read fresh on every batch and never cached at module scope, the same
+ * discipline as getStageModel(): an admin adding a theme in the panel must see
+ * it offered on the very next coding run, and a warm serverless instance must
+ * not keep serving yesterday's list.
  *
- * Scoped to active articles so themes belonging only to excluded stories stop
- * being suggested.
+ * Ordered by name so the compiled enum is stable — an enum whose member order
+ * shifted between runs would change the prompt for no reason.
  */
-export async function loadThemeVocabulary(
-  client: AnalysisClient,
-  limit = 60
-): Promise<string[]> {
+export async function loadActiveThemes(
+  client: AnalysisClient
+): Promise<ThemeOption[]> {
   const { data, error } = await client
-    .from("articles")
-    .select("ai_themes")
-    .eq("status", "active")
-    .eq("coded_status", "coded")
-    .not("ai_themes", "is", null);
+    .from("themes")
+    .select("name, description")
+    .eq("is_active", true)
+    .order("name");
 
-  if (error) return [];
+  if (error) throw new Error(`Could not load themes: ${error.message}`);
 
-  const counts = new Map<string, number>();
-  for (const row of data ?? []) {
-    for (const theme of row.ai_themes ?? []) {
-      if (theme) counts.set(theme, (counts.get(theme) ?? 0) + 1);
-    }
+  const themes = (data ?? []).filter((t) => t.name?.trim());
+  if (themes.length === 0) {
+    // Fail loudly. An empty enum would make Gemini's schema unsatisfiable and
+    // every article would error one call at a time; better to stop before
+    // spending anything.
+    throw new Error(
+      "No active themes are configured. Add at least one under Settings → Themes before running AI coding."
+    );
   }
-
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, limit)
-    .map(([theme]) => theme);
+  return themes;
 }
 
 export type CodingResult = {
@@ -241,12 +227,14 @@ export type CodingResult = {
   bodySentiment: Sentiment;
   tier: SentimentTier;
   themes: string[];
+  summary: string;
 };
 
 type CodingResponse = {
   themes?: unknown;
   headline_sentiment?: unknown;
   body_sentiment?: unknown;
+  summary?: unknown;
 };
 
 const SENTIMENTS: readonly string[] = ["positive", "neutral", "negative"];
@@ -266,8 +254,8 @@ export async function codeArticle(
   client: AnalysisClient,
   headline: string,
   body: string | null,
-  matchedKeywords: string[] = [],
-  vocabulary: string[] = []
+  matchedKeywords: string[],
+  themes: ThemeOption[]
 ): Promise<CodingResult> {
   const snippet = (body ?? "").trim().slice(0, MAX_BODY_CHARS);
 
@@ -279,46 +267,53 @@ export async function codeArticle(
     matchedKeywords.length > 0
       ? `TRACKED TERMS PRESENT: ${matchedKeywords.join(", ")}`
       : null,
-    // The vocabulary goes last, immediately before the model answers, because
-    // it is the instruction most easily lost in the middle of a long body.
-    vocabulary.length > 0
-      ? `THEMES ALREADY IN USE — reuse one of these EXACT phrases whenever it fits this article, even approximately. Only invent a new theme when none of these describes it:\n${vocabulary
-          .map((t) => `- ${t}`)
-          .join("\n")}`
-      : null,
   ]
     .filter(Boolean)
     .join("\n\n");
 
   const raw = await generateJson<CodingResponse>(client, "coding", {
-    system: SYSTEM,
+    system: buildSystemPrompt(themes),
     prompt,
-    schema: SCHEMA,
+    schema: buildSchema(themes),
   });
 
   const headlineSentiment = asSentiment(raw.headline_sentiment, "headline_sentiment");
   const bodySentiment = asSentiment(raw.body_sentiment, "body_sentiment");
 
-  const themes = Array.isArray(raw.themes)
-    ? [
-        ...new Set(
-          raw.themes
-            .filter((t): t is string => typeof t === "string")
-            .map(normaliseTheme)
-            .filter((t) => t.length > 0)
-        ),
-      ].slice(0, 3)
+  // Belt and braces over the schema enum. The API enforces the vocabulary
+  // server-side, so this should never drop anything — but a theme that somehow
+  // arrived off-list must not reach the database, where it would silently
+  // become a storyline group of one that no admin can see or retire.
+  const allowed = new Set(themes.map((t) => t.name));
+  const returned = Array.isArray(raw.themes)
+    ? raw.themes.filter((t): t is string => typeof t === "string")
     : [];
+  const accepted = [...new Set(returned.filter((t) => allowed.has(t)))].slice(0, 3);
 
-  if (themes.length === 0) {
-    throw new Error("Coding response returned no usable themes.");
+  const rejected = returned.filter((t) => !allowed.has(t));
+  if (rejected.length > 0) {
+    console.warn(
+      `[coding] discarded off-vocabulary theme(s): ${rejected.join(", ")}`
+    );
   }
+
+  if (accepted.length === 0) {
+    throw new Error(
+      `Coding response returned no valid themes${
+        returned.length > 0 ? ` (got: ${returned.join(", ")})` : ""
+      }.`
+    );
+  }
+
+  const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+  if (!summary) throw new Error("Coding response returned an empty summary.");
 
   return {
     headlineSentiment,
     bodySentiment,
     tier: sentimentTier(headlineSentiment, bodySentiment),
-    themes,
+    themes: accepted,
+    summary,
   };
 }
 
@@ -328,6 +323,7 @@ export type CodingBatchSummary = {
   /** Candidates left uncoded because the batch cap was hit. */
   remaining: number;
   byTier: Record<string, number>;
+  byTheme: Record<string, number>;
   errors: { articleId: string; error: string }[];
 };
 
@@ -339,7 +335,14 @@ export type CodableArticle = {
 };
 
 export function emptyCodingSummary(): CodingBatchSummary {
-  return { processed: 0, failed: 0, remaining: 0, byTier: {}, errors: [] };
+  return {
+    processed: 0,
+    failed: 0,
+    remaining: 0,
+    byTier: {},
+    byTheme: {},
+    errors: [],
+  };
 }
 
 /**
@@ -355,61 +358,56 @@ export async function codeArticles(
   const summary = emptyCodingSummary();
   if (rows.length === 0) return summary;
 
-  // Vocabulary grows as the batch proceeds, in fixed-size chunks.
+  // One immutable vocabulary for the whole batch.
   //
-  // Frozen for the whole batch, a cold corpus would get no vocabulary at all
-  // for its first 40 articles and fragment badly. Reloaded per article, an
-  // article's themes would depend on where concurrency happened to place it,
-  // and two runs over the same rows would disagree.
-  //
-  // Chunking gives both: within a chunk the vocabulary is fixed, and chunk
-  // boundaries fall at fixed offsets in a deterministically ORDERED row list
-  // (published_at asc, then ingested_at asc — see loadCodingCandidates), so
-  // the same input always produces the same vocabulary at the same point.
-  const seen = new Set(await loadThemeVocabulary(client));
+  // Phase 3 grew the vocabulary in chunks as coding proceeded, because themes
+  // were free text and a cold corpus had nothing to converge on. A closed
+  // vocabulary removes that problem entirely: the list does not depend on what
+  // has been coded so far, so every article in a run — and every run — sees
+  // exactly the same options. Determinism comes for free rather than from
+  // careful chunk boundaries.
+  const themes = await loadActiveThemes(client);
 
-  for (let i = 0; i < rows.length; i += VOCAB_CHUNK) {
-    const slice = rows.slice(i, i + VOCAB_CHUNK);
-    const vocabulary = [...seen];
+  const outcomes = await mapWithConcurrency(rows, CODE_CONCURRENCY, async (row) => {
+    const result = await codeArticle(
+      client,
+      row.headline,
+      row.body,
+      row.matched_keywords ?? [],
+      themes
+    );
 
-    const outcomes = await mapWithConcurrency(slice, CODE_CONCURRENCY, async (row) => {
-      const result = await codeArticle(
-        client,
-        row.headline,
-        row.body,
-        row.matched_keywords ?? [],
-        vocabulary
-      );
+    // Written per article, not batched at the end: a run that dies halfway
+    // keeps the judgements it already paid Gemini for, and the next run picks
+    // up exactly what is still pending.
+    const { error } = await client
+      .from("articles")
+      .update({
+        ai_sentiment: result.tier,
+        ai_themes: result.themes,
+        ai_summary: result.summary,
+        coded_status: "coded",
+      })
+      .eq("id", row.id);
 
-      // Written per article, not batched at the end: a run that dies halfway
-      // keeps the judgements it already paid Gemini for, and the next run
-      // picks up exactly what is still pending.
-      const { error } = await client
-        .from("articles")
-        .update({
-          ai_sentiment: result.tier,
-          ai_themes: result.themes,
-          coded_status: "coded",
-        })
-        .eq("id", row.id);
+    if (error) throw new Error(`Could not save coding: ${error.message}`);
+    return result;
+  });
 
-      if (error) throw new Error(`Could not save coding: ${error.message}`);
-      return result;
-    });
-
-    for (const outcome of outcomes) {
-      if (outcome.error !== null || !outcome.result) {
-        summary.failed += 1;
-        summary.errors.push({
-          articleId: outcome.item.id,
-          error: outcome.error ?? "Unknown coding failure.",
-        });
-        continue;
-      }
-      summary.processed += 1;
-      const tier = outcome.result.tier;
-      summary.byTier[tier] = (summary.byTier[tier] ?? 0) + 1;
-      for (const theme of outcome.result.themes) seen.add(theme);
+  for (const outcome of outcomes) {
+    if (outcome.error !== null || !outcome.result) {
+      summary.failed += 1;
+      summary.errors.push({
+        articleId: outcome.item.id,
+        error: outcome.error ?? "Unknown coding failure.",
+      });
+      continue;
+    }
+    summary.processed += 1;
+    const tier = outcome.result.tier;
+    summary.byTier[tier] = (summary.byTier[tier] ?? 0) + 1;
+    for (const theme of outcome.result.themes) {
+      summary.byTheme[theme] = (summary.byTheme[theme] ?? 0) + 1;
     }
   }
 

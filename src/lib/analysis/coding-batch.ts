@@ -44,7 +44,7 @@ export type CodingScope = {
 /**
  * Builds the candidate query.
  *
- * Two conditions are NOT part of the panel's filter state and are always
+ * Three conditions are NOT part of the panel's filter state and are always
  * applied, because they are what makes the manual review step meaningful:
  *
  *   status = 'active'      — anything the analyst excluded by hand is out.
@@ -52,6 +52,21 @@ export type CodingScope = {
  *   coded_status = 'pending' — already-coded articles are never re-coded, so
  *                            re-running over an overlapping period costs
  *                            nothing and cannot change a settled judgement.
+ *   ai_sorting_flagged is not true — articles Stage 1 judged off-topic are
+ *                            skipped rather than force-fitted into a theme.
+ *
+ * That last rule is a deliberate operator decision, and it has a real cost
+ * worth stating: the sorting flag is advisory everywhere else in this codebase
+ * — it never hides an article and never changes its status — but here it does
+ * decide whether Gemini is called. The reason is the closed vocabulary: with a
+ * fixed enum an air-cargo or trucking article cannot decline to be themed, so
+ * it would land in whichever container-shipping bucket is least wrong and
+ * pollute that storyline. Skipping is the lesser harm, but it means "code this
+ * period" does not mean "code everything in this period".
+ *
+ * It is never silent: countCodingCandidates reports the skipped count
+ * separately, the confirm modal shows it, and the CLI prints it. An analyst who
+ * disagrees with a flag can clear it, or exclude the article outright.
  *
  * The panel's status filter is deliberately ignored: an analyst reviewing the
  * 'excluded' view and hitting AI Analysis must not code excluded articles.
@@ -63,7 +78,7 @@ export type CodingScope = {
  */
 type Filterable<T> = {
   eq: (col: string, v: string | boolean) => T;
-  not: (col: string, op: string, v: null) => T;
+  not: (col: string, op: string, v: null | boolean) => T;
   ilike: (col: string, v: string) => T;
   gte: (col: string, v: string) => T;
   lte: (col: string, v: string) => T;
@@ -76,10 +91,19 @@ type Filterable<T> = {
  * never diverge, and the only way to guarantee that is for the filters to
  * exist in exactly one place.
  */
-function applyScope<T extends Filterable<T>>(query: T, scope: CodingScope): T {
+function applyScope<T extends Filterable<T>>(
+  query: T,
+  scope: CodingScope,
+  options: { onlyFlagged?: boolean } = {}
+): T {
   const range = resolvePeriod(scope.period, { from: scope.from, to: scope.to });
 
+  // `not(... is true)` rather than `eq(false)`: an unsorted row has a null
+  // flag, and eq(false) would silently exclude it from every coding run.
   let q = query.eq("status", "active").eq("coded_status", "pending");
+  q = options.onlyFlagged
+    ? q.eq("ai_sorting_flagged", true)
+    : q.not("ai_sorting_flagged", "is", true);
 
   if (scope.channel !== "all") q = q.eq("source_channel", scope.channel);
   if (scope.neg) q = q.not("matched_negative_keywords", "is", null);
@@ -89,18 +113,37 @@ function applyScope<T extends Filterable<T>>(query: T, scope: CodingScope): T {
   return applyRange(q, range);
 }
 
-/** How many articles a run would code right now. Drives the confirm modal. */
+export type CandidateCounts = {
+  /** Articles this run would actually code. */
+  codable: number;
+  /**
+   * Active, uncoded articles in the same scope that are skipped ONLY because
+   * Stage 1 flagged them off-topic. Surfaced so the skip rule is visible at
+   * the point of decision rather than being an invisible behaviour.
+   */
+  skippedFlagged: number;
+};
+
+/** What a run would do right now. Drives the confirm modal. */
 export async function countCodingCandidates(
   client: AnalysisClient,
   scope: CodingScope
-): Promise<number> {
+): Promise<CandidateCounts> {
   const { count, error } = await applyScope(
     client.from("articles").select("id", { count: "exact", head: true }),
     scope
   );
-
   if (error) throw new Error(`Could not count articles to code: ${error.message}`);
-  return count ?? 0;
+
+  // The same scope with the flag rule inverted, so the two numbers are
+  // guaranteed to be about the same set of articles.
+  const { count: flagged } = await applyScope(
+    client.from("articles").select("id", { count: "exact", head: true }),
+    scope,
+    { onlyFlagged: true }
+  );
+
+  return { codable: count ?? 0, skippedFlagged: flagged ?? 0 };
 }
 
 export type CodingCandidates = {

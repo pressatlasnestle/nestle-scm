@@ -1,15 +1,21 @@
 /**
- * Coding checks — the 5-point tier mapping, theme normalisation, and the
- * storyline grouping.
+ * Coding checks — the 5-point tier mapping and the storyline grouping.
  *
  *   npm run check:coding
  *
- * All three are pure, and all three are places where a silent error would be
- * invisible in the output: a wrong tier still looks like a tier, and a
- * fragmented grouping still looks like a grouping.
+ * Both are pure, and both are places where a silent error would be invisible
+ * in the output: a wrong tier still looks like a tier, and a fragmented
+ * grouping still looks like a grouping.
+ *
+ * The theme-normalisation checks that used to live here are gone with the
+ * function. Migration 0023 replaced free-text themes with a closed vocabulary
+ * compiled into the model's response schema, and normalisation became actively
+ * harmful — singularising the head noun turned "Port & terminal operations"
+ * into "Port & terminal operation", which matches no row in `themes`.
+ * Validation is now exact set membership against the active names, and the
+ * enum is enforced server-side by the API. See check:themes for that.
  */
 import {
-  normaliseTheme,
   sentimentTier,
   SENTIMENT_TIERS,
   type Sentiment,
@@ -32,28 +38,6 @@ const TIER_CASES: TierCase[] = [
   { h: "neutral", b: "negative", expect: "Unfavourable" },
   { h: "negative", b: "neutral", expect: "Unfavourable" },
   { h: "negative", b: "negative", expect: "Very unfavourable" },
-];
-
-const THEME_CASES: { input: string; expect: string }[] = [
-  { input: "Red Sea return", expect: "red sea return" },
-  { input: "  red  sea   return ", expect: "red sea return" },
-  { input: "Red Sea Return.", expect: "red sea return" },
-  // Plural head noun collapses onto the singular — observed live as
-  // "supply chain disruption" and "supply chain disruptions" splitting one
-  // storyline into two singleton groups.
-  { input: "supply chain disruptions", expect: "supply chain disruption" },
-  { input: "Panama Canal draft restrictions", expect: "panama canal draft restriction" },
-  { input: "freight rates", expect: "freight rate" },
-  { input: "blank sailings", expect: "blank sailing" },
-  { input: "port delays", expect: "port delay" },
-  // -ies → -y rather than a bare 's' strip.
-  { input: "supply chain vulnerabilities", expect: "supply chain vulnerability" },
-  // Words that merely END in 's' must survive intact.
-  { input: "maritime logistics", expect: "maritime logistics" },
-  { input: "port congestion crisis", expect: "port congestion crisis" },
-  { input: "strait of hormuz", expect: "strait of hormuz" },
-  // Only the head noun is touched; a plural modifier stays put.
-  { input: "rates rally", expect: "rates rally" },
 ];
 
 function article(
@@ -117,40 +101,6 @@ function main() {
   }
   if (!symmetric) failures += 1;
   console.log(`${symmetric ? "PASS" : "FAIL"}  tier is symmetric in headline/body`);
-
-  // --- theme normalisation ------------------------------------------------
-  for (const c of THEME_CASES) {
-    const got = normaliseTheme(c.input);
-    const ok = got === c.expect;
-    if (!ok) failures += 1;
-    console.log(
-      `${ok ? "PASS" : "FAIL"}  normaliseTheme(${JSON.stringify(c.input)}) → "${got}"`
-    );
-  }
-
-  const collapses =
-    new Set(THEME_CASES.slice(0, 3).map((c) => normaliseTheme(c.input))).size === 1;
-  if (!collapses) failures += 1;
-  console.log(
-    `${collapses ? "PASS" : "FAIL"}  casing/spacing/punctuation variants collapse to one grouping key`
-  );
-
-  const pluralCollapses =
-    new Set(
-      ["supply chain disruption", "Supply Chain Disruptions"].map(normaliseTheme)
-    ).size === 1;
-  if (!pluralCollapses) failures += 1;
-  console.log(
-    `${pluralCollapses ? "PASS" : "FAIL"}  singular/plural variants collapse to one grouping key`
-  );
-
-  // Normalisation must be idempotent, or a re-normalised stored theme would
-  // drift away from the key it was stored under.
-  const idempotent = THEME_CASES.every(
-    (c) => normaliseTheme(normaliseTheme(c.input)) === normaliseTheme(c.input)
-  );
-  if (!idempotent) failures += 1;
-  console.log(`${idempotent ? "PASS" : "FAIL"}  normaliseTheme is idempotent`);
 
   // --- storyline grouping -------------------------------------------------
   const corpus: StorylineArticle[] = [
@@ -217,7 +167,7 @@ function main() {
   console.log(`${tieOk ? "PASS" : "FAIL"}  mention-count tie breaks on recency → ${tied[0].lead.id}`);
 
   const total =
-    TIER_CASES.length + THEME_CASES.length + 11;
+    TIER_CASES.length + 9;
   console.log(`\n${total - failures}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

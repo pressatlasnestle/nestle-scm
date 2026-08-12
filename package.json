@@ -15,6 +15,7 @@
     "check:matcher": "tsx scripts/checks/matcher.ts",
     "check:period": "tsx scripts/checks/period.ts",
     "check:coding": "tsx scripts/checks/coding.ts",
+    "check:themes": "tsx --env-file=.env.local scripts/checks/themes.ts",
     "check:dedup": "tsx scripts/checks/dedup.ts",
     "check:parser": "tsx scripts/checks/parser.ts"
   },

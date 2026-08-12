@@ -89,11 +89,16 @@ async function runCoding(args: string[]) {
   const range = resolvePeriod(scope.period, { from: scope.from, to: scope.to });
   const label = describeRange(scope.period, range);
 
-  const candidates = await countCodingCandidates(client, scope);
+  const { codable, skippedFlagged } = await countCodingCandidates(client, scope);
   console.log(
-    `${candidates} active, uncoded article(s) in ${label}; coding up to ${MAX_CODING_BATCH}.`
+    `${codable} active, uncoded article(s) in ${label}; coding up to ${MAX_CODING_BATCH}.`
   );
-  if (candidates === 0) return;
+  if (skippedFlagged > 0) {
+    console.log(
+      `  (${skippedFlagged} further uncoded article(s) skipped: flagged off-topic by sorting)`
+    );
+  }
+  if (codable === 0) return;
 
   const { rows, total } = await loadCodingCandidates(client, scope);
   const startedAt = Date.now();
@@ -103,8 +108,15 @@ async function runCoding(args: string[]) {
   console.log(`\ncoding — done in ${seconds}s`);
   console.log(`  coded      ${summary.processed}`);
   console.log(`  failed     ${summary.failed}`);
+  console.log("\n  by tier:");
   for (const [tier, n] of Object.entries(summary.byTier).sort()) {
-    console.log(`    ${tier.padEnd(18)} ${n}`);
+    console.log(`    ${tier.padEnd(20)} ${n}`);
+  }
+  console.log("\n  by theme:");
+  for (const [theme, n] of Object.entries(summary.byTheme).sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+  )) {
+    console.log(`    ${theme.padEnd(32)} ${n}`);
   }
 
   if (summary.errors.length > 0) {

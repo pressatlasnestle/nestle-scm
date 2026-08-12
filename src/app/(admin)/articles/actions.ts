@@ -92,7 +92,10 @@ export async function bulkExcludeArticles(
  */
 export async function countArticlesToCode(
   scope: CodingScope
-): Promise<{ ok: true; count: number; cap: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; count: number; skippedFlagged: number; cap: number }
+  | { ok: false; error: string }
+> {
   const ctx = await getSessionContext();
   if (!ctx.canCurate) {
     return { ok: false, error: "You don't have permission to do that." };
@@ -102,8 +105,13 @@ export async function countArticlesToCode(
     // The caller's own client: counting is a read, and it should be subject to
     // the same RLS the panel is. Only the run itself needs service role.
     const supabase = await createClient();
-    const count = await countCodingCandidates(supabase, scope);
-    return { ok: true, count, cap: MAX_CODING_BATCH };
+    const counts = await countCodingCandidates(supabase, scope);
+    return {
+      ok: true,
+      count: counts.codable,
+      skippedFlagged: counts.skippedFlagged,
+      cap: MAX_CODING_BATCH,
+    };
   } catch (err) {
     return {
       ok: false,

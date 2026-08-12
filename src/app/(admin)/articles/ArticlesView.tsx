@@ -326,6 +326,7 @@ export function ArticlesView({
   const [codingOpen, setCodingOpen] = useState(false);
   const [codingBusy, setCodingBusy] = useState(false);
   const [codingCount, setCodingCount] = useState<number | null>(null);
+  const [codingSkipped, setCodingSkipped] = useState(0);
   const [codingCap, setCodingCap] = useState<number | null>(null);
   const [codingError, setCodingError] = useState<string | null>(null);
 
@@ -347,12 +348,14 @@ export function ArticlesView({
   function openCoding() {
     setCodingOpen(true);
     setCodingCount(null);
+    setCodingSkipped(0);
     setCodingCap(null);
     setCodingError(null);
     startTransition(async () => {
       const res = await countArticlesToCode(codingScope);
       if (res.ok) {
         setCodingCount(res.count);
+        setCodingSkipped(res.skippedFlagged);
         setCodingCap(res.cap);
       } else {
         setCodingError(res.error);
@@ -848,9 +851,21 @@ export function ArticlesView({
             <>Working out how many articles this would code…</>
           ) : codingCount === 0 ? (
             <>
-              Nothing to code in this view. Every active article in{" "}
-              <strong>{rangeLabel}</strong> matching the current filters has
-              already been coded.
+              Nothing to code in this view.{" "}
+              {codingSkipped > 0 ? (
+                <>
+                  All {codingSkipped} uncoded article
+                  {codingSkipped === 1 ? " is" : "s are"} flagged{" "}
+                  <strong style={{ color: "var(--indigo)" }}>◆ off-topic</strong>{" "}
+                  by the sorting pass, and flagged articles are not coded. Clear
+                  the flag or exclude them.
+                </>
+              ) : (
+                <>
+                  Every active article in <strong>{rangeLabel}</strong> matching
+                  the current filters has already been coded.
+                </>
+              )}
             </>
           ) : (
             <>
@@ -866,6 +881,18 @@ export function ArticlesView({
               Articles you have excluded are skipped, and anything already coded
               is never re-coded — so re-running over an overlapping period costs
               nothing.
+              {codingSkipped > 0 && (
+                <>
+                  <br />
+                  <br />
+                  {codingSkipped} further article
+                  {codingSkipped === 1 ? " is" : "s are"} flagged{" "}
+                  <strong style={{ color: "var(--indigo)" }}>◆ off-topic</strong>{" "}
+                  and will <strong>not</strong> be coded — a fixed theme list
+                  has no bucket for an off-topic story, so it would land in
+                  whichever one is least wrong.
+                </>
+              )}
               {codingCap !== null && codingCount > codingCap && (
                 <>
                   <br />
