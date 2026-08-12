@@ -20,21 +20,33 @@ const PORT = Number(process.env.HARNESS_PORT || 4173);
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".pdf": "application/pdf",
 };
 
 http
   .createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    // Matched on the exact pathname, never a prefix. "/save-pdf" begins with
+    // "/save", so a startsWith() check silently routed PDFs into the PNG
+    // handler, which base64-decoded binary as if it were a data URL and wrote
+    // a 11KB fragment of a 385KB file. It looked like a working download.
+    const route = url.pathname;
+
+    const saveName = (fallback) =>
+      (url.searchParams.get("name") || fallback).replace(/[^a-zA-Z0-9._-]/g, "-");
+
     // POST /save?name=x.png — the page rasterises its own SVG to a data URL and
     // posts it here, so the rendered result lands on disk as an image that can
     // be opened and looked at. Needed because this environment cannot take
     // browser screenshots, and "does it render legibly" is not a question the
     // DOM can be asked directly.
-    if (req.method === "POST" && req.url.startsWith("/save")) {
-      const name = (new URL(req.url, "http://x").searchParams.get("name") || "shot.png")
-        .replace(/[^a-zA-Z0-9._-]/g, "-");
+    if (req.method === "POST" && route === "/save") {
+      const name = saveName("shot.png");
       let body = "";
+      req.setEncoding("utf8");
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         const b64 = body.replace(/^data:image\/png;base64,/, "");
@@ -44,7 +56,21 @@ http
       return;
     }
 
-    const rel = decodeURIComponent((req.url || "/").split("?")[0]);
+    // POST /save-pdf?name=x.pdf — raw binary body, written straight through.
+    // Buffers are collected and concatenated rather than string-appended:
+    // coercing binary chunks to a string corrupts every byte above 0x7f.
+    if (req.method === "POST" && route === "/save-pdf") {
+      const name = saveName("out.pdf");
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        fs.writeFileSync(path.join(ROOT, name), Buffer.concat(chunks));
+        res.writeHead(200).end(name);
+      });
+      return;
+    }
+
+    const rel = decodeURIComponent(route);
     const file = path.join(ROOT, rel === "/" ? "index.html" : rel);
 
     // Never serve outside .harness, whatever the request says.

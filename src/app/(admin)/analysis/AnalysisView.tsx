@@ -1,8 +1,9 @@
 "use client";
 
-import { useTransition, type CSSProperties, type ReactNode } from "react";
+import { useState, useTransition, type CSSProperties, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useToast } from "@/components/Toast";
 import type { Week } from "@/lib/analysis/week-period";
 import type {
   WordCloudWord,
@@ -117,6 +118,37 @@ export function AnalysisView({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
+  const toast = useToast();
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Captures the charts as they are currently drawn and assembles the PDF in
+   * the browser — see lib/analysis/pdf.ts for why it is not a server render.
+   * The module is imported here rather than at the top of the file so its
+   * weight only loads for someone who actually presses the button.
+   */
+  async function downloadPdf() {
+    setExporting(true);
+    try {
+      const { exportAnalysisPdf } = await import("@/lib/analysis/pdf");
+      await exportAnalysisPdf({
+        week,
+        overview,
+        narrative,
+        stories,
+        generatedAt: new Date(),
+      });
+    } catch (err) {
+      // Never fails silently: a download that simply does not happen is
+      // indistinguishable from a slow one, and the user would just keep
+      // clicking.
+      toast.error(
+        err instanceof Error ? err.message : "Could not build the PDF."
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function selectWeek(start: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -136,19 +168,36 @@ export function AnalysisView({
             never plotted.
           </p>
         </div>
-        <select
-          style={selectStyle}
-          aria-label="Week"
-          value={week.start}
-          disabled={pending}
-          onChange={(e) => selectWeek(e.target.value)}
-        >
-          {weeks.map((w) => (
-            <option key={w.start} value={w.start}>
-              {w.label}
-            </option>
-          ))}
-        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* Same "↓ Export …" convention as every chart's CSV button, so the
+              page has one download idiom rather than two. */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={downloadPdf}
+            disabled={exporting || overview.total === 0}
+            title={
+              overview.total === 0
+                ? "Nothing published in this week to export."
+                : "Download this week's charts and narrative as a PDF."
+            }
+          >
+            {exporting ? "Building…" : "↓ Export PDF"}
+          </button>
+          <select
+            style={selectStyle}
+            aria-label="Week"
+            value={week.start}
+            disabled={pending}
+            onChange={(e) => selectWeek(e.target.value)}
+          >
+            {weeks.map((w) => (
+              <option key={w.start} value={w.start}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loadError && (

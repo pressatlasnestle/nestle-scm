@@ -28,12 +28,16 @@ import { applyWeek, resolveWeek, weekDays } from "../../src/lib/analysis/week-pe
 import {
   analysable,
   limitWords,
+  overview,
   polarityBreakdown,
+  storiesForTopThemes,
   themeStats,
+  topThemes,
   volumeByDay,
   wordCloudWords,
   type WeekArticle,
 } from "../../src/lib/analysis/week-stats";
+import { parseStoredNarrative } from "../../src/lib/analysis/narrative";
 
 const SELECT =
   "id, headline, url, media, published_at, status, coded_status, ai_sorting_flagged, ai_sentiment, ai_themes, ai_summary, matched_keywords, keyword_mention_count";
@@ -59,14 +63,26 @@ async function main() {
   const rows = (data ?? []) as WeekArticle[];
   const coded = analysable(rows);
   const words = wordCloudWords(coded);
+  const themes = themeStats(coded);
+
+  // The stored narrative, so the PDF export can be exercised with the same
+  // text the panel shows rather than a placeholder.
+  const { data: report } = await client
+    .from("reports")
+    .select("analysis_narrative")
+    .eq("week_of", week.start)
+    .maybeSingle();
 
   const payload = {
     week,
+    overview: overview(rows),
     volume: volumeByDay(rows, weekDays(week)),
     polarity: polarityBreakdown(coded),
-    themes: themeStats(coded),
+    themes,
     words,
     wordsShown: limitWords(words, WORDS_IN_CLOUD),
+    stories: storiesForTopThemes(coded, topThemes(themes, 3)),
+    narrative: parseStoredNarrative(report?.analysis_narrative),
     codedTotal: coded.length,
   };
 
@@ -84,6 +100,7 @@ async function main() {
     `import { createRoot } from "react-dom/client";
 import { PolarityChart, ThemePolarityChart, VolumeChart } from "@/app/(admin)/analysis/charts";
 import { WordCloud } from "@/app/(admin)/analysis/WordCloud";
+import { buildAnalysisPdf } from "@/lib/analysis/pdf";
 import data from "./data.json";
 
 const d = data as any;
@@ -100,6 +117,62 @@ createRoot(document.getElementById("root")!).render(
     </div>
   </div>
 );
+
+// Exposed so the verification step can build the REAL PDF — same function the
+// button calls — and post the bytes back to disk to be opened and looked at.
+// A fixed generatedAt keeps the output byte-comparable between runs.
+(window as any).__buildPdf = async () => {
+  const doc = await buildAnalysisPdf({
+    week: d.week,
+    overview: d.overview,
+    narrative: d.narrative,
+    stories: d.stories,
+    generatedAt: new Date("2026-08-12T12:00:00Z"),
+  });
+  const blob = doc.output("blob");
+  const res = await fetch("/save-pdf?name=analysis.pdf", { method: "POST", body: blob });
+  (window as any).__pdfBytes = await blob.arrayBuffer();
+  return (await res.text()) + " (" + blob.size + " bytes)";
+};
+
+/**
+ * Renders the generated PDF's own pages back to PNGs.
+ *
+ * This is the only check that can distinguish a correct export from one that
+ * wrote successfully and put blank rectangles where the charts should be —
+ * which is exactly the failure worth guarding against, since every other
+ * signal (no exception, plausible byte count, right page count) looks
+ * identical in both cases.
+ */
+(window as any).__loadPdf = async () => {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.mjs";
+  const pdf = await pdfjs.getDocument({ data: (window as any).__pdfBytes.slice(0) }).promise;
+  (window as any).__pdf = pdf;
+  return "pages=" + pdf.numPages;
+};
+
+/** One page at a time, so a slow render cannot exceed a tool call's budget. */
+(window as any).__renderPdfPage = async (p: number, scale = 1.25) => {
+  const pdf = (window as any).__pdf;
+  const page = await pdf.getPage(p);
+  const viewport = page.getViewport({ scale });
+  const cv = document.createElement("canvas");
+  cv.width = Math.ceil(viewport.width);
+  cv.height = Math.ceil(viewport.height);
+  const ctx = cv.getContext("2d")!;
+  // White, because a PDF page is white and an unpainted canvas is not — and a
+  // transparent canvas would hide exactly the blank-chart failure being
+  // looked for.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  await page.render({ canvas: cv, canvasContext: ctx, viewport }).promise;
+  const r = await fetch("/save?name=pdf-page-" + p + ".png", {
+    method: "POST",
+    body: cv.toDataURL("image/png"),
+  });
+  return await r.text();
+};
 `
   );
 
@@ -120,6 +193,14 @@ createRoot(document.getElementById("root")!).render(
     alias: { "@": resolve(process.cwd(), "src") },
     logLevel: "warning",
   });
+
+  // pdf.js renders on a worker; copy it next to the bundle so the harness page
+  // can reach it as a plain static file.
+  const worker = resolve(
+    process.cwd(),
+    "node_modules/pdfjs-dist/build/pdf.worker.min.mjs"
+  );
+  writeFileSync(join(outDir, "pdf.worker.min.mjs"), readFileSync(worker));
 
   // The panel's real stylesheet, minus the Next font-variable declarations it
   // cannot resolve outside the app — substituted with the same families so

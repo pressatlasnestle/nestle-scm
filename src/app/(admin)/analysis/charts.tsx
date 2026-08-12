@@ -110,13 +110,25 @@ export function VolumeChart({ week, days }: { week: Week; days: VolumeDay[] }) {
             wrapperStyle={{ fontSize: 12, fontFamily: "var(--font-body)" }}
           />
           {/* Stacked, so the bar height is the day's true volume while the
-              analysable share stays readable as a proportion of it. */}
+              analysable share stays readable as a proportion of it.
+
+              isAnimationActive={false} matters beyond taste, and this chart
+              was the only one missing it. Recharts defers creating the bar
+              rectangles to an animation frame, so until that frame runs the
+              bars do not exist in the DOM at all — not zero-height, absent.
+              The PDF export rasterises whatever is on screen at the moment it
+              is asked, so an export taken in the first moments after load, or
+              from a backgrounded tab where requestAnimationFrame is throttled,
+              captured a volume chart with axes, gridlines and no data. It was
+              found exactly that way: the generated PDF had an empty plot area
+              while every other chart was correct. */}
           <Bar
             dataKey="coded"
             name="Coded"
             stackId="v"
             fill="var(--teal)"
             radius={[0, 0, 0, 0]}
+            isAnimationActive={false}
           />
           <Bar
             dataKey="notAnalysed"
@@ -124,6 +136,7 @@ export function VolumeChart({ week, days }: { week: Week; days: VolumeDay[] }) {
             stackId="v"
             fill="var(--line)"
             radius={[3, 3, 0, 0]}
+            isAnimationActive={false}
           />
         </BarChart>
       </ResponsiveContainer>

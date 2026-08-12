@@ -26,22 +26,27 @@
     "check:analysis": "tsx --env-file=.env.local scripts/checks/analysis-numbers.ts",
     "check:analysis-access": "tsx --env-file=.env.local scripts/checks/analysis-access.ts",
     "check:visual": "tsx --env-file=.env.local scripts/checks/visual-harness.ts",
-    "harness": "node scripts/harness-server.js"
+    "harness": "node scripts/harness-server.js",
+    "check:pdf": "tsx scripts/checks/pdf-pages.ts",
+    "check:pdf-text": "tsx scripts/checks/pdf-text.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.2",
     "@visx/wordcloud": "^4.0.0",
     "fast-xml-parser": "^5.10.1",
+    "jspdf": "^4.2.1",
     "next": "15.5.23",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "recharts": "^3.10.1"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.5",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "pdfjs-dist": "^6.2.108",
     "tsx": "^4.23.12",
     "typescript": "^5.7.0"
   }
