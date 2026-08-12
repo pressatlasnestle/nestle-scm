@@ -485,17 +485,53 @@ function windowEndingNow(spanMs: number): IngestionWindow {
   return { start: new Date(end.getTime() - spanMs), end };
 }
 
+/**
+ * Optional window override, in hours.
+ *
+ * Every window-based run type takes one, and every one of them ignores it when
+ * absent — the defaults below are exactly what they were. It exists because a
+ * catch-up after an outage is a real operation with no fixed size: when the
+ * 12-hourly cron was down for two days the gap was 48 hours, which is neither
+ * the backfill's 7 days nor the scheduled run's 24. Passing the number beats
+ * editing a constant and redeploying to run a one-off.
+ *
+ * The window only widens what is FETCHED. Dedup still decides what is stored,
+ * so an over-wide window costs fetch time and finds duplicates rather than
+ * creating them — which is why this is safe to guess high on.
+ */
+export type WindowOverride = { hours?: number | null };
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Resolves an override to a span, falling back to the run type's own default.
+ * A non-finite or non-positive value falls back rather than producing an
+ * inverted or empty window — "0 hours" is far more likely to be a parsing slip
+ * than a request to fetch nothing.
+ */
+export function resolveWindowMs(
+  fallbackMs: number,
+  override?: WindowOverride
+): number {
+  const hours = override?.hours;
+  if (typeof hours !== "number" || !Number.isFinite(hours) || hours <= 0) {
+    return fallbackMs;
+  }
+  return hours * HOUR_MS;
+}
+
 /** One-time seed: all active sources for the current universe mode, 7 days. */
 export async function runBackfill(
   client: IngestionClient,
   triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"]
+  defer?: ExecuteRunOptions["defer"],
+  window?: WindowOverride
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
   return executeRun(client, {
     runType: "backfill",
-    window: windowEndingNow(WINDOW_BACKFILL_MS),
+    window: windowEndingNow(resolveWindowMs(WINDOW_BACKFILL_MS, window)),
     sources,
     triggeredBy,
     defer,
@@ -508,29 +544,37 @@ export async function runBackfill(
  */
 export async function runScheduled(
   client: IngestionClient,
-  defer?: ExecuteRunOptions["defer"]
+  defer?: ExecuteRunOptions["defer"],
+  window?: WindowOverride
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
   return executeRun(client, {
     runType: "scheduled",
-    window: windowEndingNow(WINDOW_SCHEDULED_MS),
+    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, window)),
     sources,
     defer,
   });
 }
 
-/** Operator-triggered re-run; same shape as scheduled, logged separately. */
+/**
+ * Operator-triggered re-run; same shape as scheduled, logged separately.
+ *
+ * This is the natural home for a catch-up after an outage: it is deliberate
+ * rather than automatic, so its run row does not muddy the scheduled cadence
+ * when someone later asks how the cron has been performing.
+ */
 export async function runManual(
   client: IngestionClient,
   triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"]
+  defer?: ExecuteRunOptions["defer"],
+  window?: WindowOverride
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
   const sources = await selectSources(client, mode);
   return executeRun(client, {
     runType: "manual",
-    window: windowEndingNow(WINDOW_SCHEDULED_MS),
+    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, window)),
     sources,
     triggeredBy,
     defer,
