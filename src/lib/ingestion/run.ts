@@ -27,8 +27,35 @@ export type UniverseMode = "whole_universe" | "positive_only";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Sources fetched at once. Low enough to stay a polite client of each feed. */
-const FETCH_CONCURRENCY = 5;
+/**
+ * Sources fetched at once.
+ *
+ * Was 5, on the reasoning that a low number keeps us a polite client. That
+ * reasoning does not apply here and the number was costing us the whole run.
+ * Politeness is a per-HOST concern, and every source is a different host —
+ * one fetch each, never several at one publisher — so raising this widens how
+ * many DIFFERENT servers are talked to at once, not how hard any one of them
+ * is hit.
+ *
+ * The cost was concrete. 71 sources in the universe, 30 of them currently
+ * failing, and a failing source burns the full FETCH_TIMEOUT_MS (15s) before
+ * it gives up. A batch takes as long as its slowest member, so at concurrency
+ * 5 that is ceil(71/5) = 15 batches, most of them containing at least one
+ * timeout: comfortably past the route's 60s maxDuration. The first scheduled
+ * run after the cron was fixed died exactly that way — it captured 27 articles
+ * and was then killed mid-flight, leaving its ingestion_runs row stuck at
+ * 'running' because closeRun() never got to execute.
+ *
+ * At 24 that is 3 batches, so the timeout-dominated worst case is ~45s rather
+ * than ~225s, and a run finishes inside the request that started it.
+ *
+ * This is a tuning fix, not a structural one. A universe several times larger,
+ * or a slower FETCH_TIMEOUT_MS, would push past 60s again — at which point the
+ * answer is to stop doing the whole universe in one request rather than to
+ * keep raising this. The CLI (npm run ingest) has no such limit and is the
+ * right tool for anything large, which is why the backfill runs there.
+ */
+const FETCH_CONCURRENCY = 24;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
