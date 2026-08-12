@@ -200,6 +200,7 @@ export type Database = {
           articles_duplicate: number | null
           articles_found: number | null
           articles_new: number | null
+          articles_skipped_coded: number
           articles_skipped_paywall: number | null
           articles_suppressed_exclusion: number | null
           completed_at: string | null
@@ -217,6 +218,7 @@ export type Database = {
           articles_duplicate?: number | null
           articles_found?: number | null
           articles_new?: number | null
+          articles_skipped_coded?: number
           articles_skipped_paywall?: number | null
           articles_suppressed_exclusion?: number | null
           completed_at?: string | null
@@ -234,6 +236,7 @@ export type Database = {
           articles_duplicate?: number | null
           articles_found?: number | null
           articles_new?: number | null
+          articles_skipped_coded?: number
           articles_skipped_paywall?: number | null
           articles_suppressed_exclusion?: number | null
           completed_at?: string | null

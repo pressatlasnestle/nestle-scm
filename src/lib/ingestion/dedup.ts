@@ -9,9 +9,10 @@ import type { FeedItem, IngestionClient } from "./types";
  *                                        pushed to alt_urls
  *   existing 'active', not longer      → discard the pull
  *   existing 'excluded' or 'deleted'   → skip entirely, never resurrect
+ *   existing coded_status='coded'      → skip entirely, never overwrite
  *
- * The last rule is what makes a curator's exclude/delete permanent across
- * every future run, so it is checked before anything else touches the row.
+ * The last two rules are what make a decision permanent across every future
+ * run, so both are checked before anything else touches the row.
  *
  * On top of that, one cross-channel rule (see CHANNEL_PRIORITY): when the same
  * fingerprint arrives from a different channel than the row was written by,
@@ -22,7 +23,9 @@ export type DedupOutcome =
   | "inserted"
   | "updated"
   | "duplicate"
-  | "skipped_tombstoned";
+  | "skipped_tombstoned"
+  /** Locked: the row has been coded, so its stored text must not change. */
+  | "skipped_coded";
 
 export type DedupResult = {
   outcome: DedupOutcome;
@@ -144,6 +147,7 @@ type ExistingRow = {
   url: string | null;
   alt_urls: string[];
   source_channel: string | null;
+  coded_status: string | null;
 };
 
 /**
@@ -231,7 +235,7 @@ async function findByDedupKey(
 ): Promise<{ row: ExistingRow | null; error: string | null }> {
   const { data, error } = await client
     .from("articles")
-    .select("id, status, word_count, url, alt_urls, source_channel")
+    .select("id, status, word_count, url, alt_urls, source_channel, coded_status")
     .eq("dedup_key", dedupKey)
     .maybeSingle();
 
@@ -281,6 +285,48 @@ async function applyToExisting(
   if (row.status === "excluded" || row.status === "deleted") {
     return {
       outcome: "skipped_tombstoned",
+      dedupKey,
+      articleId: row.id,
+      error: null,
+    };
+  }
+
+  /**
+   * Coded articles are locked content — same tier as the tombstone above, and
+   * checked before channel priority or word count get a say.
+   *
+   * ai_sentiment, ai_themes and ai_summary are all derived from the `body` on
+   * this row. Superseding the body without re-coding leaves those three
+   * describing text that is no longer stored, and nothing anywhere would say
+   * so: the charts, the weekly narrative and the newsletter would all keep
+   * quoting an analysis of an article that has silently been replaced. Coding
+   * costs a Gemini call per article and is a deliberate, analyst-triggered
+   * step, so the stale result would also outlive the next several runs.
+   *
+   * The cost is real and accepted: a genuinely better version of an
+   * already-coded article will not be picked up, and its body stays whatever
+   * was first captured. That is the right way round. Missing a fuller body on
+   * something already analysed is a gap; silently invalidating a finished
+   * analysis is a corruption, and only one of the two is visible to the person
+   * relying on it.
+   *
+   * WHY NOT ALSO LOCK ON ai_sorting_status = 'complete'.
+   *
+   * Because it would lock everything. Sorting fires automatically over every
+   * newly inserted row at the end of each run, so an article is 'complete'
+   * within minutes of first capture — measured on the live corpus, 122 of 122
+   * articles. Locking on it would make shouldSupersede() unreachable and
+   * retire the longer-body rule by accident rather than by decision. Sorting's
+   * output is also advisory (it flags, it never hides), so a stale relevance
+   * judgement is cheap and an analyst can clear it; a stale sentiment tier is
+   * not, because it is published.
+   *
+   * An operator who does want the newer body has a deliberate route: exclude
+   * the row, or reset coded_status to 'pending' and let the next run take it.
+   */
+  if (row.coded_status === "coded") {
+    return {
+      outcome: "skipped_coded",
       dedupKey,
       articleId: row.id,
       error: null,

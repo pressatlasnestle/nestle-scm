@@ -47,6 +47,12 @@ export type RunCounters = {
   articlesSkippedPaywall: number;
   articlesSuppressedExclusion: number;
   /**
+   * Pulls discarded because the stored row was already coded. Counted, not
+   * silent: this is the accepted cost of the coded-article lock in dedup.ts,
+   * and an accepted cost that nobody can see is just an undiscovered bug.
+   */
+  articlesSkippedCoded: number;
+  /**
    * Ids of the rows this run inserted. Not a counter, but it rides on the same
    * accumulator every run type already threads through ingestItems() — which
    * is what makes the Stage 1 sorting pass fire for the Google News and
@@ -129,7 +135,13 @@ export async function selectSources(
 // Run lifecycle
 // ---------------------------------------------------------------------------
 
-function emptyCounters(): RunCounters {
+/**
+ * Exported so the Google News and newsapi.ai sweeps, which manage their own run
+ * rows rather than going through executeRun(), start from the same zeroed
+ * shape. They each used to inline this literal, which meant adding a counter
+ * broke both — the compiler caught it, but the duplication was the bug.
+ */
+export function emptyCounters(): RunCounters {
   return {
     sourcesChecked: 0,
     articlesFound: 0,
@@ -137,6 +149,7 @@ function emptyCounters(): RunCounters {
     articlesDuplicate: 0,
     articlesSkippedPaywall: 0,
     articlesSuppressedExclusion: 0,
+    articlesSkippedCoded: 0,
     insertedArticleIds: [],
   };
 }
@@ -185,6 +198,7 @@ async function closeRun(
       articles_duplicate: summary.articlesDuplicate,
       articles_skipped_paywall: summary.articlesSkippedPaywall,
       articles_suppressed_exclusion: summary.articlesSuppressedExclusion,
+      articles_skipped_coded: summary.articlesSkippedCoded,
       errors: summary.errors.length > 0 ? summary.errors : null,
     })
     .eq("id", runId);
@@ -241,11 +255,24 @@ export async function ingestItems(
     if (result.outcome === "inserted") {
       counters.articlesNew += 1;
       if (result.articleId) counters.insertedArticleIds.push(result.articleId);
+    } else {
+      // 'updated', 'skipped_tombstoned' and 'skipped_coded' are all "we
+      // already knew this story": one enriched an existing row, one hit a
+      // curator's tombstone, one hit a coded article's lock. None is new, so
+      // all three roll up with plain duplicates.
+      counters.articlesDuplicate += 1;
+
+      // ...but the coded lock also gets its own counter, because unlike a
+      // plain duplicate it means a pull that MIGHT have been better was
+      // dropped on purpose. Logged per occurrence as well so the specific
+      // article is identifiable from the run's logs.
+      if (result.outcome === "skipped_coded") {
+        counters.articlesSkippedCoded += 1;
+        console.log(
+          `[dedup] kept coded article ${result.articleId} — incoming pull discarded (${item.wordCount} words) to preserve its analysis`
+        );
+      }
     }
-    // 'updated' and 'skipped_tombstoned' are both "we already knew this story":
-    // one enriched an existing row, one hit a curator's tombstone. Neither is
-    // new, so both roll up with plain duplicates.
-    else counters.articlesDuplicate += 1;
   }
 }
 

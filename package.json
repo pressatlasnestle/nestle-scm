@@ -21,6 +21,7 @@
     "check:themes": "tsx --env-file=.env.local scripts/checks/themes.ts",
     "check:dedup": "tsx scripts/checks/dedup.ts",
     "check:parser": "tsx scripts/checks/parser.ts",
+    "check:coded-lock": "tsx --env-file=.env.local scripts/checks/dedup-coded-lock.ts",
     "check:analysis": "tsx --env-file=.env.local scripts/checks/analysis-numbers.ts",
     "check:analysis-access": "tsx --env-file=.env.local scripts/checks/analysis-access.ts"
   },

@@ -3,6 +3,7 @@ import {
   ingestItems,
   scheduleSorting,
   type ExecuteRunOptions,
+  emptyCounters,
   type RunCounters,
   type RunError,
   type RunSummary,
@@ -307,15 +308,7 @@ export async function runNewsApiAiSweep(
   const end = new Date();
   const start = new Date(end.getTime() - WINDOW_DAYS * 24 * 3600 * 1000);
 
-  const counters: RunCounters = {
-    sourcesChecked: 0,
-    articlesFound: 0,
-    articlesNew: 0,
-    articlesDuplicate: 0,
-    articlesSkippedPaywall: 0,
-    articlesSuppressedExclusion: 0,
-    insertedArticleIds: [],
-  };
+  const counters = emptyCounters();
   const errors: RunError[] = [];
 
   const { data: runRow } = await client
@@ -455,6 +448,7 @@ async function finish(
         articles_duplicate: counters.articlesDuplicate,
         articles_skipped_paywall: counters.articlesSkippedPaywall,
         articles_suppressed_exclusion: counters.articlesSuppressedExclusion,
+        articles_skipped_coded: counters.articlesSkippedCoded,
         errors: errors.length > 0 ? errors : null,
       })
       .eq("id", runId);
