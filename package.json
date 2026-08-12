@@ -11,13 +11,18 @@
     "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
     "sort": "tsx --env-file=.env.local scripts/sort.ts",
     "code": "tsx --env-file=.env.local scripts/code.ts",
-    "check": "npm run check:matcher && npm run check:dedup && npm run check:parser && npm run check:period && npm run check:coding",
+    "narrative": "tsx --env-file=.env.local scripts/narrative.ts",
+    "check": "npm run check:matcher && npm run check:dedup && npm run check:parser && npm run check:period && npm run check:week && npm run check:csv && npm run check:coding",
+    "check:csv": "tsx scripts/checks/csv.ts",
     "check:matcher": "tsx scripts/checks/matcher.ts",
     "check:period": "tsx scripts/checks/period.ts",
+    "check:week": "tsx scripts/checks/week-period.ts",
     "check:coding": "tsx scripts/checks/coding.ts",
     "check:themes": "tsx --env-file=.env.local scripts/checks/themes.ts",
     "check:dedup": "tsx scripts/checks/dedup.ts",
-    "check:parser": "tsx scripts/checks/parser.ts"
+    "check:parser": "tsx scripts/checks/parser.ts",
+    "check:analysis": "tsx --env-file=.env.local scripts/checks/analysis-numbers.ts",
+    "check:analysis-access": "tsx --env-file=.env.local scripts/checks/analysis-access.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
@@ -25,7 +30,8 @@
     "fast-xml-parser": "^5.10.1",
     "next": "15.5.23",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

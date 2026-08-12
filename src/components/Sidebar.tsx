@@ -34,9 +34,19 @@ export function Sidebar({ items }: { items: NavItem[] }) {
       >
         <span className="dot" /> Articles
       </Link>
-      <div className="nav-item disabled" aria-disabled="true">
+      {/* Read-visible to every role, same tier as Newsletter — the panel is
+          read-only apart from the admin/curate-gated Regenerate action, which
+          gates itself. */}
+      <Link
+        href="/analysis"
+        className={`nav-item${
+          pathname === "/analysis" || pathname.startsWith("/analysis/")
+            ? " active"
+            : ""
+        }`}
+      >
         <span className="dot" /> Analysis
-      </div>
+      </Link>
 
       <div className="nav-label">Settings</div>
       {items.map((item) => {

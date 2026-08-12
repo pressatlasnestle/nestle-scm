@@ -423,6 +423,9 @@ export type Database = {
       }
       reports: {
         Row: {
+          analysis_generated_at: string | null
+          analysis_generated_by: string | null
+          analysis_narrative: Json | null
           article_count: number | null
           created_by: string | null
           generated_at: string | null
@@ -435,6 +438,9 @@ export type Database = {
           week_of: string | null
         }
         Insert: {
+          analysis_generated_at?: string | null
+          analysis_generated_by?: string | null
+          analysis_narrative?: Json | null
           article_count?: number | null
           created_by?: string | null
           generated_at?: string | null
@@ -447,6 +453,9 @@ export type Database = {
           week_of?: string | null
         }
         Update: {
+          analysis_generated_at?: string | null
+          analysis_generated_by?: string | null
+          analysis_narrative?: Json | null
           article_count?: number | null
           created_by?: string | null
           generated_at?: string | null
@@ -459,6 +468,13 @@ export type Database = {
           week_of?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "reports_analysis_generated_by_fkey"
+            columns: ["analysis_generated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "reports_created_by_fkey"
             columns: ["created_by"]

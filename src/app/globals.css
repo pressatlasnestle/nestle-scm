@@ -736,6 +736,130 @@ tbody tr:hover td {
   gap: 7px;
 }
 
+/* ---------- Stat cards (Analysis overview) ----------
+   Same surface, border, radius and eyebrow treatment as .mode-card and
+   .integration-card — a stat card is one more card in that family, not a new
+   visual idea. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.stat-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 9px;
+}
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+}
+.stat-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-top: 7px;
+  line-height: 1.45;
+}
+
+/* ---------- Chart cards (Analysis) ---------- */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.chart-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
+}
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.chart-head h3 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+.chart-head p {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 460px;
+}
+.chart-head .btn {
+  flex-shrink: 0;
+}
+.chart-body {
+  padding: 14px 14px 10px;
+}
+/* Recharts draws its own focus outline on bars/slices; the panel already
+   signals hover through the tooltip cursor. */
+.chart-body .recharts-wrapper:focus,
+.chart-body .recharts-surface:focus {
+  outline: none;
+}
+
+/* ---------- Narrative ---------- */
+.narrative-lede {
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--text);
+  max-width: 78ch;
+}
+.narrative-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 78ch;
+  margin: 8px 0 14px;
+}
+.theme-block {
+  padding: 16px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.theme-block:first-child {
+  border-top: none;
+}
+.theme-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+.theme-block-head h4 {
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.story-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 26px;
+  margin-top: 6px;
+}
+
 /* ---------- Empty & loading states ---------- */
 .empty-state {
   padding: 44px 18px;

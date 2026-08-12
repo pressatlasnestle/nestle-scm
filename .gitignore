@@ -30,3 +30,6 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# claude code (local agent + editor tooling)
+.claude/
