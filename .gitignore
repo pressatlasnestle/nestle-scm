@@ -33,3 +33,6 @@ yarn-error.log*
 
 # claude code (local agent + editor tooling)
 .claude/
+
+# visual harness output (generated)
+.harness/

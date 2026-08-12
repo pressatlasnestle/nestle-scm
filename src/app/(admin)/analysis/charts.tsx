@@ -5,7 +5,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  LabelList,
   Legend,
   Pie,
   PieChart,
@@ -161,7 +160,8 @@ export function PolarityChart({
           Share of the week&apos;s {codedTotal} coded article
           {codedTotal === 1 ? "" : "s"}, judged from a cargo owner&apos;s seat.
           The stored 5-point tiers roll up here: both favourable tiers into one
-          bar, both unfavourable into the other.
+          slice, both unfavourable into the other. Each slice is labelled with
+          its share and its article count.
         </>
       }
       onExport={exportCsv}
@@ -171,50 +171,118 @@ export function PolarityChart({
           : undefined
       }
     >
-      <ResponsiveContainer width="100%" height={260}>
-        <BarChart data={shares} margin={{ top: 22, right: 8, bottom: 0, left: -18 }}>
-          <CartesianGrid stroke="var(--line-soft)" vertical={false} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tick={AXIS} />
-          <YAxis
-            tickLine={false}
-            axisLine={false}
-            tick={AXIS}
-            unit="%"
-            domain={[0, 100]}
-          />
+      <ResponsiveContainer width="100%" height={300}>
+        <PieChart>
+          <Pie
+            data={shares}
+            dataKey="percent"
+            nameKey="label"
+            cx="50%"
+            cy="50%"
+            outerRadius={78}
+            innerRadius={44}
+            paddingAngle={1}
+            stroke="var(--panel)"
+            strokeWidth={2}
+            isAnimationActive={false}
+            // Labelled on the slice itself, not left to the legend: a legend
+            // makes the reader match colour to name and then guess magnitude
+            // from arc length, which is the one thing a pie is bad at. The
+            // number removes the guess.
+            label={renderPolarityLabel}
+            labelLine={false}
+          >
+            {shares.map((s) => (
+              <Cell key={s.polarity} fill={POLARITY_COLOR[s.polarity]} />
+            ))}
+          </Pie>
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
-            cursor={{ fill: "var(--line-soft)" }}
-            formatter={(value, _name, item) => {
+            formatter={(value, name, item) => {
               const share = (item as { payload?: PolarityShare } | undefined)
                 ?.payload;
               return [
                 `${value}%  (${share?.articles ?? 0} articles)`,
-                "Share",
+                String(name),
               ];
             }}
           />
-          <Bar dataKey="percent" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-            {shares.map((s) => (
-              <Cell key={s.polarity} fill={POLARITY_COLOR[s.polarity]} />
-            ))}
-            {/* The count is printed on the bar because a percentage over a
-                small week is easy to over-read — "40%" of five articles is
-                two, and the reader should be able to see that without
-                hovering. */}
-            <LabelList
-              dataKey="articles"
-              position="top"
-              style={{
-                fill: "var(--text-muted)",
-                fontSize: 11,
-                fontFamily: "var(--font-mono)",
-              }}
-            />
-          </Bar>
-        </BarChart>
+          <Legend
+            wrapperStyle={{ fontSize: 12, fontFamily: "var(--font-body)" }}
+          />
+        </PieChart>
       </ResponsiveContainer>
     </ChartCard>
+  );
+}
+
+/**
+ * Slice label: the percentage, with the article count beneath it.
+ *
+ * Both, because a percentage alone over a small week is easy to over-read —
+ * "40%" of five articles is two — and the count is what stops that. The count
+ * used to sit above the bars this chart replaced, so keeping it here loses
+ * nothing.
+ *
+ * DRAWN OUTSIDE THE RING, not on it. The first version put labels at the arc
+ * midpoint in the panel's background colour, which looked right on the two
+ * wide slices and failed on the narrow one: "21.2%" is wider than a 21% slice
+ * is thick, so it spilled over the donut hole and became dark text on a dark
+ * background. Outside placement makes legibility independent of how narrow the
+ * slice is, which is the only version that stays correct for every week's
+ * data rather than for the week it was designed against.
+ *
+ * Coloured to match its slice, so the label still reads as belonging to it
+ * without a leader line doing that work.
+ */
+function renderPolarityLabel(props: {
+  cx?: number;
+  cy?: number;
+  midAngle?: number;
+  outerRadius?: number;
+  payload?: PolarityShare;
+}) {
+  const { cx = 0, cy = 0, midAngle = 0, outerRadius = 0 } = props;
+  const share = props.payload;
+  // A zero slice has no arc to point at, so it gets no label; the legend and
+  // the CSV still carry it.
+  if (!share || share.articles === 0) return null;
+
+  const rad = -midAngle * (Math.PI / 180);
+  const radius = outerRadius + 26;
+  const x = cx + radius * Math.cos(rad);
+  const y = cy + radius * Math.sin(rad);
+  // Anchor away from the centre so long labels grow outward rather than back
+  // across the ring.
+  const anchor = Math.cos(rad) >= 0 ? "start" : "end";
+  const dx = Math.cos(rad) >= 0 ? -6 : 6;
+
+  return (
+    <g>
+      <text
+        x={x + dx}
+        y={y - 6}
+        textAnchor={anchor}
+        dominantBaseline="central"
+        fill={POLARITY_COLOR[share.polarity]}
+        fontSize={15}
+        fontWeight={700}
+        fontFamily="var(--font-display)"
+      >
+        {share.percent}%
+      </text>
+      <text
+        x={x + dx}
+        y={y + 10}
+        textAnchor={anchor}
+        dominantBaseline="central"
+        fill="var(--text-muted)"
+        fontSize={11}
+        fontFamily="var(--font-mono)"
+      >
+        {share.articles} article{share.articles === 1 ? "" : "s"}
+      </text>
+    </g>
   );
 }
 
