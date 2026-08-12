@@ -19,6 +19,7 @@
 
 import { SENTIMENT_TIERS, type SentimentTier } from "./coding";
 import { dayTick } from "./week-period";
+import { isNearDuplicateHeadline } from "./similarity";
 
 /** The columns the Analysis panel loads. Mirrors the select in page.tsx. */
 export type WeekArticle = {
@@ -380,7 +381,22 @@ export function topStories(
         (b.published_at ?? "").localeCompare(a.published_at ?? "") ||
         a.headline.localeCompare(b.headline)
     )
-    .slice(0, limit);
+    // Trimmed to `limit` HERE rather than by slicing above, so a story dropped
+    // as a near-duplicate is replaced by the next-ranked one instead of
+    // shortening the list. The ranking is untouched; this only removes.
+    //
+    // One story reaching the corpus twice under different provenance is normal
+    // — two standing Google Alert queries returning the same article both
+    // produce a legitimate, differently-fingerprinted row — and it is only a
+    // problem when both surface in a three-item list. See similarity.ts.
+    .reduce<RankedStory[]>((picked, candidate) => {
+      if (picked.length >= limit) return picked;
+      const isDuplicate = picked.some((p) =>
+        isNearDuplicateHeadline(p.headline, candidate.headline)
+      );
+      if (!isDuplicate) picked.push(candidate);
+      return picked;
+    }, []);
 }
 
 export type ThemeStories = {
