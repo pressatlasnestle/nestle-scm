@@ -5,8 +5,21 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { shortDate } from "@/lib/format";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
-import { PERIOD_LABEL, PERIOD_KEYS, type PeriodKey } from "@/lib/articles/period";
-import { excludeArticle, deleteArticle, bulkExcludeArticles } from "./actions";
+import {
+  PERIOD_LABEL,
+  PERIOD_KEYS,
+  describeRange,
+  resolvePeriod,
+  type PeriodKey,
+} from "@/lib/articles/period";
+import type { CodingScope } from "@/lib/analysis/coding-batch";
+import {
+  excludeArticle,
+  deleteArticle,
+  bulkExcludeArticles,
+  countArticlesToCode,
+  runAiCoding,
+} from "./actions";
 
 const CHANNEL_OPTIONS: { value: string; label: string }[] = [
   { value: "all", label: "All" },
@@ -51,6 +64,8 @@ export type ArticleRow = {
   ai_sorting_flagged: boolean | null;
   ai_sorting_reasoning: string | null;
   coded_status: string | null;
+  ai_sentiment: string | null;
+  ai_themes: string[] | null;
 };
 
 export type FilterState = {
@@ -183,6 +198,51 @@ function relevanceFlag(row: ArticleRow) {
   );
 }
 
+/**
+ * The 5-point favourability tier, coloured on a diverging scale so the two
+ * unfavourable tiers read as one direction and the two favourable as the
+ * other. Deliberately not the same palette as either flag badge — sentiment is
+ * a coded value, not a warning.
+ */
+const TIER_STYLE: Record<string, { bg: string; color: string }> = {
+  "Very unfavourable": { bg: "var(--coral-dim)", color: "var(--coral)" },
+  Unfavourable: { bg: "var(--coral-dim)", color: "var(--coral)" },
+  Neutral: { bg: "var(--panel-raised)", color: "var(--text-muted)" },
+  Favourable: { bg: "var(--teal-dim)", color: "var(--teal)" },
+  "Very favourable": { bg: "var(--teal-dim)", color: "var(--teal)" },
+};
+
+function sentimentCell(row: ArticleRow) {
+  if (row.coded_status !== "coded" || !row.ai_sentiment) {
+    return <span className="mono-dim">—</span>;
+  }
+  const style = TIER_STYLE[row.ai_sentiment] ?? {
+    bg: "var(--panel-raised)",
+    color: "var(--text-muted)",
+  };
+  const themes = row.ai_themes ?? [];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+      <span
+        className="badge"
+        style={{ background: style.bg, color: style.color }}
+        title={`Favourability from a cargo owner's perspective: ${row.ai_sentiment}`}
+      >
+        {/* "Very" prefixed tiers get a double mark so the extremes are
+            distinguishable at a glance without a second colour. */}
+        {row.ai_sentiment.startsWith("Very ") ? "±± " : "± "}
+        {row.ai_sentiment}
+      </span>
+      {themes.length > 0 && (
+        <span className="mono-dim" style={{ fontSize: 11 }} title={themes.join(" · ")}>
+          {themes.slice(0, 2).join(" · ")}
+          {themes.length > 2 ? ` +${themes.length - 2}` : ""}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function ArticlesView({
   rows,
   total,
@@ -259,6 +319,64 @@ export function ArticlesView({
 
   const [qLocal, setQLocal] = useState(filters.q);
 
+  // AI coding. The count is fetched when the modal opens rather than derived
+  // from `total`, because the two are different sets: `total` counts what the
+  // panel is showing (which may include already-coded articles, and honours
+  // the status filter), while coding only ever touches active + uncoded rows.
+  const [codingOpen, setCodingOpen] = useState(false);
+  const [codingBusy, setCodingBusy] = useState(false);
+  const [codingCount, setCodingCount] = useState<number | null>(null);
+  const [codingCap, setCodingCap] = useState<number | null>(null);
+  const [codingError, setCodingError] = useState<string | null>(null);
+
+  const codingScope: CodingScope = {
+    period: filters.period,
+    from: filters.from,
+    to: filters.to,
+    channel: filters.channel,
+    q: filters.q,
+    neg: filters.neg,
+    sflag: filters.sflag,
+  };
+
+  const rangeLabel = describeRange(
+    filters.period,
+    resolvePeriod(filters.period, { from: filters.from, to: filters.to })
+  );
+
+  function openCoding() {
+    setCodingOpen(true);
+    setCodingCount(null);
+    setCodingCap(null);
+    setCodingError(null);
+    startTransition(async () => {
+      const res = await countArticlesToCode(codingScope);
+      if (res.ok) {
+        setCodingCount(res.count);
+        setCodingCap(res.cap);
+      } else {
+        setCodingError(res.error);
+      }
+    });
+  }
+
+  function runCoding() {
+    setCodingBusy(true);
+    startTransition(async () => {
+      const res = await runAiCoding(codingScope);
+      setCodingBusy(false);
+      setCodingOpen(false);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      const parts = [`Coded ${res.processed ?? 0} article(s).`];
+      if (res.failed) parts.push(`${res.failed} failed (still pending).`);
+      if (res.remaining) parts.push(`${res.remaining} left — run again to continue.`);
+      toast.success(parts.join(" "));
+    });
+  }
+
   // Push params to the URL (server re-queries). Resets to page 1 unless the
   // update is itself a page change.
   function setParams(updates: Record<string, string | null>) {
@@ -319,7 +437,7 @@ export function ArticlesView({
     });
   }
 
-  const colCount = 7 + (canCurate ? 2 : 0);
+  const colCount = 8 + (canCurate ? 2 : 0);
   const allOnPageSelected =
     excludableIds.length > 0 && selected.size >= excludableIds.length;
 
@@ -452,6 +570,17 @@ export function ArticlesView({
           >
             ◆ Off-topic?
           </button>
+          {canCurate && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={openCoding}
+              disabled={pending}
+              title="Run Gemini sentiment + theme coding over the active, not-yet-coded articles in the current view."
+            >
+              ✦ AI Analysis
+            </button>
+          )}
           <span className="cell-sub" style={{ marginLeft: "auto" }}>
             {total === 0
               ? "No articles"
@@ -522,6 +651,9 @@ export function ArticlesView({
                   <th title="◆ = AI relevance doubt (hover for reasoning). ⚠ = an exclusion term is present in the text. Two different signals.">
                     Flags
                   </th>
+                  <th title="5-point favourability from a cargo owner's perspective, plus the themes storylines group on. Written by AI Analysis.">
+                    Sentiment
+                  </th>
                   <th
                     onClick={toggleMentionsSort}
                     style={{ cursor: "pointer", userSelect: "none" }}
@@ -587,6 +719,7 @@ export function ArticlesView({
                         );
                       })()}
                     </td>
+                    <td>{sentimentCell(a)}</td>
                     <td className="mono-dim">{a.keyword_mention_count ?? "—"}</td>
                     <td className="mono-dim">{a.word_count ?? "—"}</td>
                     {canCurate && (
@@ -694,6 +827,56 @@ export function ArticlesView({
               </>
             )
           ) : null
+        }
+      />
+
+      <ConfirmModal
+        open={codingOpen}
+        title="Run AI coding?"
+        confirmLabel={
+          codingCount === null
+            ? "Checking…"
+            : `Run on ${Math.min(codingCount, codingCap ?? codingCount)}`
+        }
+        busy={codingBusy || codingCount === null}
+        onConfirm={runCoding}
+        onCancel={() => setCodingOpen(false)}
+        body={
+          codingError ? (
+            <>Could not work out what would be coded: {codingError}</>
+          ) : codingCount === null ? (
+            <>Working out how many articles this would code…</>
+          ) : codingCount === 0 ? (
+            <>
+              Nothing to code in this view. Every active article in{" "}
+              <strong>{rangeLabel}</strong> matching the current filters has
+              already been coded.
+            </>
+          ) : (
+            <>
+              Run AI coding on the{" "}
+              <strong>
+                {Math.min(codingCount, codingCap ?? codingCount)} active article
+                {Math.min(codingCount, codingCap ?? codingCount) === 1 ? "" : "s"}
+              </strong>{" "}
+              in <strong>{rangeLabel}</strong>.{" "}
+              <strong>This calls Gemini once per article.</strong>
+              <br />
+              <br />
+              Articles you have excluded are skipped, and anything already coded
+              is never re-coded — so re-running over an overlapping period costs
+              nothing.
+              {codingCap !== null && codingCount > codingCap && (
+                <>
+                  <br />
+                  <br />
+                  {codingCount} match in total. This run codes the {codingCap}{" "}
+                  oldest — a single run is capped so it cannot outlast its
+                  request. Run again to continue where it stops.
+                </>
+              )}
+            </>
+          )
         }
       />
 

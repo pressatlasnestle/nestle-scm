@@ -88,7 +88,7 @@ export default async function ArticlesPage({
   let query = supabase
     .from("articles")
     .select(
-      "id, headline, url, media, source_channel, published_at, matched_keywords, matched_negative_keywords, keyword_mention_count, word_count, status, ai_sorting_status, ai_sorting_flagged, ai_sorting_reasoning, coded_status",
+      "id, headline, url, media, source_channel, published_at, matched_keywords, matched_negative_keywords, keyword_mention_count, word_count, status, ai_sorting_status, ai_sorting_flagged, ai_sorting_reasoning, coded_status, ai_sentiment, ai_themes",
       { count: "exact" }
     );
 
