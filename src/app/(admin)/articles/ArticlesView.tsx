@@ -5,6 +5,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { shortDate } from "@/lib/format";
 import { useToast } from "@/components/Toast";
 import { ConfirmModal } from "@/components/ConfirmModal";
+import { PERIOD_LABEL, PERIOD_KEYS, type PeriodKey } from "@/lib/articles/period";
 import { excludeArticle, deleteArticle, bulkExcludeArticles } from "./actions";
 
 const CHANNEL_OPTIONS: { value: string; label: string }[] = [
@@ -12,7 +13,9 @@ const CHANNEL_OPTIONS: { value: string; label: string }[] = [
   { value: "media_rss", label: "RSS" },
   { value: "google_alerts", label: "Google Alerts" },
   { value: "google_news_seed", label: "Google News" },
-  { value: "newsdata", label: "NewsData" },
+  { value: "newsapi_ai", label: "newsapi.ai" },
+  // Retired in migration 0021 but still has rows; kept so they stay reachable.
+  { value: "newsdata", label: "NewsData (retired)" },
 ];
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -44,13 +47,21 @@ export type ArticleRow = {
   keyword_mention_count: number | null;
   word_count: number | null;
   status: string;
+  ai_sorting_status: string | null;
+  ai_sorting_flagged: boolean | null;
+  ai_sorting_reasoning: string | null;
+  coded_status: string | null;
 };
 
 export type FilterState = {
   q: string;
   channel: string;
   neg: boolean;
+  sflag: boolean;
   status: string;
+  period: PeriodKey;
+  from: string | null;
+  to: string | null;
   sort: string;
   dir: string;
   page: number;
@@ -115,16 +126,59 @@ function keywordChips(keywords: string[]) {
   );
 }
 
+/**
+ * The two flags are deliberately NOT interchangeable, and the visual language
+ * keeps them apart — different colour, different glyph, different verb:
+ *
+ *   ⚠ amber  — an exclusion TERM appeared in the text. Lexical, deterministic,
+ *              says nothing about what the article is about.
+ *   ◆ indigo — the AI questions whether the article is on-topic at all.
+ *              A judgement, and the reasoning is attached.
+ *
+ * An article can carry both, one, or neither, and each means something
+ * different to the analyst deciding whether to exclude it.
+ */
 function negFlag(negs: string[] | null) {
   if (!negs || negs.length === 0) return null;
   return (
     <span
       className="badge"
-      title={`Contains negative keywords: ${negs.join(", ")}`}
+      title={`Exclusion terms present in the text: ${negs.join(", ")}. Lexical match only — this does not mean the article is off-topic.`}
       style={{ background: "var(--amber-dim)", color: "var(--amber)" }}
     >
-      ⚠ contains: {negs.slice(0, 2).join(", ")}
+      ⚠ term: {negs.slice(0, 2).join(", ")}
       {negs.length > 2 ? ` +${negs.length - 2}` : ""}
+    </span>
+  );
+}
+
+function relevanceFlag(row: ArticleRow) {
+  if (row.ai_sorting_status !== "complete") {
+    return (
+      <span
+        className="badge"
+        title="Not yet judged by the sorting pass. Runs automatically after ingestion; npm run sort backfills."
+        style={{ background: "var(--panel-raised)", color: "var(--text-muted)" }}
+      >
+        ◇ unsorted
+      </span>
+    );
+  }
+  if (!row.ai_sorting_flagged) return null;
+  return (
+    <span
+      className="badge"
+      title={
+        row.ai_sorting_reasoning
+          ? `AI questions relevance: ${row.ai_sorting_reasoning}`
+          : "AI questions whether this article belongs in the corpus."
+      }
+      style={{
+        background: "rgba(124,147,240,0.15)",
+        color: "var(--indigo)",
+      }}
+    >
+      ◆ off-topic?
     </span>
   );
 }
@@ -242,6 +296,8 @@ export function ArticlesView({
     filters.q !== "" ||
     filters.channel !== "all" ||
     filters.neg ||
+    filters.sflag ||
+    filters.period !== "all" ||
     filters.status !== "active";
 
   function runAction() {
@@ -275,7 +331,11 @@ export function ArticlesView({
           <p>
             Every captured story. Excluded and deleted articles are kept as
             tombstones and hidden by default — switch the status filter to review
-            them.
+            them. <strong style={{ color: "var(--indigo)" }}>◆</strong> marks an
+            AI relevance doubt;{" "}
+            <strong style={{ color: "var(--amber)" }}>⚠</strong> marks an
+            exclusion term in the text. Neither hides an article — both are
+            advisory, and excluding is always your call.
           </p>
         </div>
       </div>
@@ -316,10 +376,55 @@ export function ArticlesView({
               </option>
             ))}
           </select>
+          <select
+            style={selectStyle}
+            aria-label="Period"
+            value={filters.period}
+            onChange={(e) => {
+              const next = e.target.value as PeriodKey;
+              setParams({
+                period: next === "all" ? null : next,
+                // Custom bounds are meaningless under a preset, and leaving
+                // them in the URL would silently re-apply on the next switch
+                // back to Custom.
+                ...(next === "custom" ? {} : { from: null, to: null }),
+              });
+            }}
+          >
+            {PERIOD_KEYS.map((k) => (
+              <option key={k} value={k}>
+                {PERIOD_LABEL[k]}
+              </option>
+            ))}
+          </select>
+
+          {filters.period === "custom" && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="date"
+                style={selectStyle}
+                aria-label="From date"
+                value={filters.from ?? ""}
+                max={filters.to ?? undefined}
+                onChange={(e) => setParams({ from: e.target.value || null })}
+              />
+              <span className="cell-sub">to</span>
+              <input
+                type="date"
+                style={selectStyle}
+                aria-label="To date"
+                value={filters.to ?? ""}
+                min={filters.from ?? undefined}
+                onChange={(e) => setParams({ to: e.target.value || null })}
+              />
+            </span>
+          )}
+
           <button
             type="button"
             className="btn btn-sm"
             aria-pressed={filters.neg}
+            title="Show only articles containing an exclusion term. Lexical match — not a relevance judgement."
             onClick={() => setParams({ neg: filters.neg ? null : "1" })}
             style={
               filters.neg
@@ -327,7 +432,25 @@ export function ArticlesView({
                 : undefined
             }
           >
-            ⚠ Flagged only
+            ⚠ Exclusion term
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-pressed={filters.sflag}
+            title="Show only articles the AI sorting pass flagged as possibly off-topic. Hover a row's ◆ badge for its reasoning."
+            onClick={() => setParams({ sflag: filters.sflag ? null : "1" })}
+            style={
+              filters.sflag
+                ? {
+                    background: "rgba(124,147,240,0.15)",
+                    borderColor: "rgba(124,147,240,0.4)",
+                    color: "var(--indigo)",
+                  }
+                : undefined
+            }
+          >
+            ◆ Off-topic?
           </button>
           <span className="cell-sub" style={{ marginLeft: "auto" }}>
             {total === 0
@@ -396,7 +519,9 @@ export function ArticlesView({
                   <th>Media</th>
                   <th>Published</th>
                   <th>Matched keywords</th>
-                  <th>Flag</th>
+                  <th title="◆ = AI relevance doubt (hover for reasoning). ⚠ = an exclusion term is present in the text. Two different signals.">
+                    Flags
+                  </th>
                   <th
                     onClick={toggleMentionsSort}
                     style={{ cursor: "pointer", userSelect: "none" }}
@@ -442,7 +567,26 @@ export function ArticlesView({
                     </td>
                     <td className="mono-dim">{shortDate(a.published_at)}</td>
                     <td>{keywordChips(a.matched_keywords)}</td>
-                    <td>{negFlag(a.matched_negative_keywords) ?? <span className="mono-dim">—</span>}</td>
+                    <td>
+                      {(() => {
+                        const neg = negFlag(a.matched_negative_keywords);
+                        const rel = relevanceFlag(a);
+                        if (!neg && !rel) return <span className="mono-dim">—</span>;
+                        return (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-start",
+                              gap: 4,
+                            }}
+                          >
+                            {rel}
+                            {neg}
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="mono-dim">{a.keyword_mention_count ?? "—"}</td>
                     <td className="mono-dim">{a.word_count ?? "—"}</td>
                     {canCurate && (

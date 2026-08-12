@@ -10,8 +10,9 @@
     "typecheck": "tsc --noEmit",
     "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
     "sort": "tsx --env-file=.env.local scripts/sort.ts",
-    "check": "npm run check:matcher && npm run check:dedup && npm run check:parser",
+    "check": "npm run check:matcher && npm run check:dedup && npm run check:parser && npm run check:period",
     "check:matcher": "tsx scripts/checks/matcher.ts",
+    "check:period": "tsx scripts/checks/period.ts",
     "check:dedup": "tsx scripts/checks/dedup.ts",
     "check:parser": "tsx scripts/checks/parser.ts"
   },
