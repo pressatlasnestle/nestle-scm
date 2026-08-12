@@ -287,106 +287,6 @@ function renderPolarityLabel(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Theme distribution
-// ---------------------------------------------------------------------------
-
-/**
- * Slice colours.
- *
- * Themes have no inherent direction, so this is a categorical ramp rather than
- * the F/N/U scale — reusing teal/amber/coral here would imply a theme was
- * "good" or "bad", which is exactly the reading to avoid. It cycles if the
- * vocabulary ever outgrows it; the pie is ordered by size, so a repeat can only
- * happen between the two smallest, least-read slices.
- */
-const THEME_COLORS = [
-  "#2fd9c7",
-  "#7c93f0",
-  "#f0ae4e",
-  "#f0705f",
-  "#5ec8e5",
-  "#b58ce0",
-  "#8fd47a",
-  "#e88fb4",
-  "#d9c25e",
-  "#6fa8dc",
-];
-
-export function ThemePieChart({
-  week,
-  themes,
-  codedTotal,
-}: {
-  week: Week;
-  themes: ThemeStat[];
-  codedTotal: number;
-}) {
-  function exportCsv() {
-    downloadCsv(
-      csvFilename("themes", week.isoLabel),
-      themes,
-      themeColumns(codedTotal)
-    );
-  }
-
-  return (
-    <ChartCard
-      title="Theme distribution"
-      hint={
-        <>
-          Coded articles per theme. An article can carry up to three themes and
-          is counted under each, so the slices describe{" "}
-          <strong>coverage</strong>, not a split of the {codedTotal} articles —
-          they add up to more.
-        </>
-      }
-      onExport={exportCsv}
-      empty={
-        themes.length === 0
-          ? "No coded article in this week carries a theme yet."
-          : undefined
-      }
-    >
-      <ResponsiveContainer width="100%" height={300}>
-        <PieChart>
-          <Pie
-            data={themes}
-            dataKey="articles"
-            nameKey="theme"
-            cx="50%"
-            cy="50%"
-            outerRadius={100}
-            innerRadius={48}
-            paddingAngle={1}
-            stroke="var(--panel)"
-            strokeWidth={2}
-            isAnimationActive={false}
-          >
-            {themes.map((t, i) => (
-              <Cell key={t.theme} fill={THEME_COLORS[i % THEME_COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            formatter={(value, name) => [`${value} articles`, String(name)]}
-          />
-          <Legend
-            layout="vertical"
-            align="right"
-            verticalAlign="middle"
-            wrapperStyle={{
-              fontSize: 11.5,
-              fontFamily: "var(--font-body)",
-              maxWidth: 190,
-            }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-    </ChartCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Favourability per theme
 // ---------------------------------------------------------------------------
 
@@ -402,8 +302,17 @@ export function ThemePolarityChart({
   // Flattened for Recharts, which wants the stack keys at the top level.
   const data = themes.map((t) => ({
     theme: t.theme,
-    // Long theme names would otherwise be truncated to ambiguity on the axis.
-    short: t.theme.length > 22 ? `${t.theme.slice(0, 21)}…` : t.theme,
+    // The total is appended to the axis label — "Chokepoints & routing (25)".
+    // This chart used to sit next to a theme-distribution pie whose only job
+    // was to show that total; the pie is gone, and putting the number on the
+    // label keeps it without spending a second chart on it. It is also more
+    // precise than the pie was: a count is exact where a slice is estimated.
+    //
+    // Truncation applies to the NAME only, never to the count — a label that
+    // dropped its number would defeat the point of moving it here.
+    short:
+      (t.theme.length > 27 ? `${t.theme.slice(0, 26)}…` : t.theme) +
+      ` (${t.articles})`,
     favourable: t.counts.favourable,
     neutral: t.counts.neutral,
     unfavourable: t.counts.unfavourable,
@@ -419,12 +328,14 @@ export function ThemePolarityChart({
 
   return (
     <ChartCard
-      title="Favourability by theme"
+      title="Themes"
       hint={
         <>
-          The same articles as the pie, split by direction. Horizontal because
-          theme names are long — bar length is the article count, and the same
-          multi-theme counting applies.
+          Every theme in the week, busiest first, split by direction. The number
+          after each name is that theme&apos;s article total. An article can
+          carry up to three themes and is counted under each, so the totals add
+          up to more than the {codedTotal} coded article
+          {codedTotal === 1 ? "" : "s"}.
         </>
       }
       onExport={exportCsv}
@@ -457,7 +368,10 @@ export function ThemePolarityChart({
             tickLine={false}
             axisLine={false}
             tick={{ ...AXIS, fontFamily: "var(--font-body)", fontSize: 11.5 }}
-            width={150}
+            // Widened from 150 to fit the appended count. Without this the
+            // gutter clips the very thing the theme pie was removed in favour
+            // of showing.
+            width={214}
           />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}

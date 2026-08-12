@@ -15,7 +15,6 @@ import type {
 import type { WeekNarrative } from "@/lib/analysis/narrative";
 import {
   PolarityChart,
-  ThemePieChart,
   ThemePolarityChart,
   VolumeChart,
 } from "./charts";
@@ -225,11 +224,6 @@ export function AnalysisView({
             <PolarityChart
               week={week}
               shares={polarity}
-              codedTotal={codedTotal}
-            />
-            <ThemePieChart
-              week={week}
-              themes={themes}
               codedTotal={codedTotal}
             />
             <ThemePolarityChart
