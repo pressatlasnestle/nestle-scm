@@ -409,7 +409,10 @@ export function storiesForTopThemes(
 // ---------------------------------------------------------------------------
 
 export type WordCloudWord = {
+  /** Canonical taxonomy term. What the CSV and every lookup use. */
   keyword: string;
+  /** Short display form for the cloud. See cloudLabel(). */
+  label: string;
   /** Word size. Total keyword_mention_count over the articles carrying it. */
   mentions: number;
   /** How many coded articles contributed. */
@@ -419,6 +422,48 @@ export type WordCloudWord = {
   /** The weights the colour was decided from, so the call is auditable. */
   weights: PolarityCounts;
 };
+
+/** Longest single term drawn before it is cut. Roughly a third of the canvas. */
+const MAX_LABEL_CHARS = 22;
+
+/**
+ * The short form a keyword is DRAWN as. The canonical term is untouched.
+ *
+ * Most of this taxonomy's entries are not words. 62 of 161 active keywords are
+ * slash-separated variant BUNDLES — "DP World / PSA / Hutchison / APM
+ * Terminals / Adani Ports / Eurogate" is one keyword, 67 characters long — and
+ * a cloud draws a string, not a concept. At any font size large enough to
+ * signal "this term mattered this week", a 67-character string is wider than
+ * the whole canvas: it gets clipped at both edges and shoves every other word
+ * into an overlapping heap in the middle.
+ *
+ * That, not the number of words and not the font floor, is what made this
+ * chart unreadable. Capping the count and raising the minimum size both help,
+ * but neither touches a single term that is physically too wide to draw.
+ *
+ * So a bundle is drawn as its first variant plus a count of the rest —
+ * "DP World +5" — which is short, and honest about being an abbreviation. A
+ * long single term is truncated instead. Nothing is lost: the full term is on
+ * the tooltip and in every row of the CSV.
+ */
+export function cloudLabel(keyword: string): string {
+  const parts = keyword
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (parts.length > 1) {
+    const head =
+      parts[0].length > MAX_LABEL_CHARS
+        ? `${parts[0].slice(0, MAX_LABEL_CHARS - 1)}…`
+        : parts[0];
+    return `${head} +${parts.length - 1}`;
+  }
+
+  return keyword.length > MAX_LABEL_CHARS
+    ? `${keyword.slice(0, MAX_LABEL_CHARS - 1)}…`
+    : keyword;
+}
 
 /**
  * THE COLOUR RULE, stated exactly, because it is a judgement and not a
@@ -503,6 +548,7 @@ export function wordCloudWords(coded: WeekArticle[]): WordCloudWord[] {
   return [...acc.entries()]
     .map(([keyword, cell]) => ({
       keyword,
+      label: cloudLabel(keyword),
       mentions: cell.mentions,
       articles: cell.articles,
       sentiment: dominantPolarity(cell.weights),

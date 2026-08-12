@@ -251,7 +251,9 @@ async function main() {
 
   // --- Word cloud ----------------------------------------------------------
   const words = wordCloudWords(coded);
-  const drawn = limitWords(words, 60);
+  // Must track WORDS_IN_CLOUD in the Analysis page, or this checks a cap the
+  // panel does not apply.
+  const drawn = limitWords(words, 40);
 
   console.log(`\nWORD CLOUD: ${words.length} keywords, ${drawn.length} drawn`);
   for (const w of drawn.slice(0, 10)) {
@@ -314,6 +316,33 @@ async function main() {
     `  ${tieGrey ? "PASS" : "FAIL"}  exact tie → neutral; empty → neutral; plurality of 1 → wins`
   );
 
+  // The drawn label must stay short enough to lay out, and must never replace
+  // the canonical term — the cloud abbreviates, the data does not.
+  const longest = words.reduce((a, b) => (b.label.length > a.label.length ? b : a), words[0]);
+  const labelsShort = words.every((w) => w.label.length <= 26);
+  console.log(
+    `  ${labelsShort ? "PASS" : "FAIL"}  every drawn label is ≤26 chars (longest: "${longest?.label}" from a ${longest?.keyword.length}-char term)`
+  );
+
+  // A slash-separated bundle must abbreviate to "<first> +N", and N must be
+  // the number of variants actually dropped — an off-by-one here would
+  // misreport how many terms a word stands for.
+  const bundles = words.filter((w) => w.keyword.includes("/"));
+  const bundlesOk = bundles.every((w) => {
+    const parts = w.keyword.split("/").map((p) => p.trim()).filter(Boolean);
+    return w.label.endsWith(` +${parts.length - 1}`);
+  });
+  console.log(
+    `  ${bundlesOk ? "PASS" : "FAIL"}  all ${bundles.length} bundled keyword(s) abbreviate to "<first> +N" with the right N`
+  );
+
+  // A single-word keyword must be left exactly alone.
+  const plain = words.filter((w) => !w.keyword.includes("/") && w.keyword.length <= 22);
+  const plainOk = plain.every((w) => w.label === w.keyword);
+  console.log(
+    `  ${plainOk ? "PASS" : "FAIL"}  all ${plain.length} short single-term keyword(s) are drawn verbatim`
+  );
+
   // No keyword may be counted more times than there are coded articles.
   const overCounted = words.filter((w) => w.articles > coded.length);
   console.log(
@@ -374,6 +403,9 @@ async function main() {
     colourOk &&
     oneSidedOk &&
     tieGrey &&
+    labelsShort &&
+    bundlesOk &&
+    plainOk &&
     overCounted.length === 0;
   process.exit(ok ? 0 : 1);
 }

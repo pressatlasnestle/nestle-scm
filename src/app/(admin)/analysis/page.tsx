@@ -38,12 +38,19 @@ const WEEK_CHOICES = 12;
 const MAX_WEEK_ROWS = 2000;
 
 /**
- * Words drawn in the cloud. Purely a legibility limit — past roughly this many
- * the smallest words are unreadable and d3-cloud starts dropping them silently
- * anyway, which is worse than trimming deliberately and saying so. The CSV
- * export always carries the full set.
+ * Words drawn in the cloud.
+ *
+ * A legibility cap, and the honest lever: shrinking the font to fit everything
+ * trades one unreadable failure for another, and d3-cloud silently drops
+ * whatever it cannot place anyway — so an uncapped cloud is already truncating,
+ * just without saying so or choosing which words to lose. Forty legible terms
+ * beat a hundred and fifty illegible ones, and the CSV export always carries
+ * the full set for anyone who needs it.
+ *
+ * Tunable. Raise it and re-run the visual harness; do not raise it on the
+ * assumption that a smaller font will absorb the difference.
  */
-const WORDS_IN_CLOUD = 60;
+const WORDS_IN_CLOUD = 40;
 
 type SearchParams = { week?: string };
 

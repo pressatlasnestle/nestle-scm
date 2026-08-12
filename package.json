@@ -24,7 +24,9 @@
     "check:parser": "tsx scripts/checks/parser.ts",
     "check:coded-lock": "tsx --env-file=.env.local scripts/checks/dedup-coded-lock.ts",
     "check:analysis": "tsx --env-file=.env.local scripts/checks/analysis-numbers.ts",
-    "check:analysis-access": "tsx --env-file=.env.local scripts/checks/analysis-access.ts"
+    "check:analysis-access": "tsx --env-file=.env.local scripts/checks/analysis-access.ts",
+    "check:visual": "tsx --env-file=.env.local scripts/checks/visual-harness.ts",
+    "harness": "node scripts/harness-server.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

@@ -95,6 +95,9 @@ export const STORY_COLUMNS: CsvColumn<StoryExportRow>[] = [
  * green word was 40/35/25 rather than 90/5/5 and judge it themselves.
  */
 export const WORD_CLOUD_COLUMNS: CsvColumn<WordCloudWord>[] = [
+  // The canonical taxonomy term, never the abbreviated cloud label. An export
+  // whose keyword column read "DP World +5" could not be joined back to the
+  // keywords table, which is most of what an export is for.
   { header: "keyword", value: (w) => w.keyword },
   { header: "total_mentions", value: (w) => w.mentions },
   { header: "dominant_sentiment", value: (w) => w.sentiment },
