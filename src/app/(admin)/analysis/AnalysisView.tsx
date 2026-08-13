@@ -14,6 +14,12 @@ import type {
   WeekOverview,
 } from "@/lib/analysis/week-stats";
 import type { WeekNarrative } from "@/lib/analysis/narrative";
+import type {
+  CongestionRow,
+  ScheduleReliabilityRow,
+  WaitingTimeRow,
+} from "@/lib/analysis/operational";
+import { OperationalSection } from "./OperationalCharts";
 import {
   PolarityChart,
   ThemePolarityChart,
@@ -93,6 +99,9 @@ export function AnalysisView({
   stories,
   narrative,
   narrativeGeneratedAt,
+  congestion,
+  waitingTime,
+  reliability,
   codedTotal,
   truncated,
   loadError,
@@ -109,6 +118,9 @@ export function AnalysisView({
   stories: ThemeStories[];
   narrative: WeekNarrative | null;
   narrativeGeneratedAt: string | null;
+  congestion: CongestionRow | null;
+  waitingTime: WaitingTimeRow | null;
+  reliability: ScheduleReliabilityRow | null;
   codedTotal: number;
   truncated: boolean;
   loadError: string | null;
@@ -268,6 +280,22 @@ export function AnalysisView({
         </div>
       ) : (
         <>
+          {/* Market data first, and visually fenced off. These figures are
+              typed in from a subscription report; everything below the divider
+              is derived from the article corpus. Mixing them in one grid would
+              make a reader assume one provenance for both. */}
+          <OperationalSection
+            week={week}
+            congestion={congestion}
+            waitingTime={waitingTime}
+            reliability={reliability}
+            canCurate={canCurate}
+          />
+
+          <div className="section-divider">
+            <span>From the article corpus</span>
+          </div>
+
           <div className="chart-grid">
             <VolumeChart week={week} days={volume} />
             <PolarityChart

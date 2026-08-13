@@ -17,6 +17,7 @@ export function ChartCard({
   hint,
   onExport,
   exportLabel = "Export CSV",
+  action,
   empty,
   children,
 }: {
@@ -24,6 +25,13 @@ export function ChartCard({
   hint: ReactNode;
   onExport?: () => void;
   exportLabel?: string;
+  /**
+   * Extra control in the title bar, left of Export. Used by the manually
+   * entered operational charts for their Edit button, which is role-gated by
+   * the caller — this shell takes whatever it is handed and does not decide
+   * who sees it.
+   */
+  action?: ReactNode;
   /** Shown instead of the chart when there is nothing to plot. */
   empty?: ReactNode;
   children: ReactNode;
@@ -35,6 +43,8 @@ export function ChartCard({
           <h3>{title}</h3>
           <p>{hint}</p>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {action}
         {onExport && (
           <button
             type="button"
@@ -50,6 +60,7 @@ export function ChartCard({
             ↓ {exportLabel}
           </button>
         )}
+        </div>
       </div>
       {empty ? (
         <div className="empty-state">

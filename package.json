@@ -29,7 +29,8 @@
     "harness": "node scripts/harness-server.js",
     "check:pdf": "tsx scripts/checks/pdf-pages.ts",
     "check:pdf-text": "tsx scripts/checks/pdf-text.ts",
-    "check:similarity": "tsx scripts/checks/similarity.ts"
+    "check:similarity": "tsx scripts/checks/similarity.ts",
+    "check:operational": "tsx --env-file=.env.local scripts/checks/operational.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

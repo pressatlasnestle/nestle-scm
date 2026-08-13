@@ -97,6 +97,36 @@ export default async function AnalysisPage({
       .maybeSingle(),
   ]);
 
+  // Manually-entered market data. Read on every render with no caching, the
+  // same discipline as getStageModel(): someone who has just typed this week's
+  // congestion figures must see them on the next load, and a module-level
+  // cache would survive inside a warm serverless instance and keep serving the
+  // absence.
+  const [{ data: congestion }, { data: waitingTime }, { data: reliability }] =
+    await Promise.all([
+      supabase
+        .from("operational_congestion")
+        .select("week_of, global_teu_waiting, global_pct_fleet, region_data, entered_at, entered_by")
+        .eq("week_of", week.start)
+        .maybeSingle(),
+      supabase
+        .from("operational_waiting_time")
+        .select("week_of, port_data, entered_at, entered_by")
+        .eq("week_of", week.start)
+        .maybeSingle(),
+      // Monthly, and carried forward: the most recent month AT OR BEFORE the
+      // selected week. Bounded rather than simply "latest" so that navigating
+      // back to an older week cannot show figures published after it — a
+      // carried-forward number is fine, a time-travelling one is not.
+      supabase
+        .from("operational_schedule_reliability")
+        .select("month_of, glp_issue_number, global_reliability_pct, avg_delay_days, alliance_data, entered_at, entered_by")
+        .lte("month_of", `${week.end.slice(0, 7)}-01`)
+        .order("month_of", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
   const rows = (data ?? []) as WeekArticle[];
 
   // Every chart is derived from this one set of rows, so they cannot disagree
@@ -119,6 +149,9 @@ export default async function AnalysisPage({
       stories={storiesForTopThemes(coded, top)}
       narrative={parseStoredNarrative(report?.analysis_narrative)}
       narrativeGeneratedAt={report?.analysis_generated_at ?? null}
+      congestion={congestion ?? null}
+      waitingTime={waitingTime ?? null}
+      reliability={reliability ?? null}
       codedTotal={coded.length}
       truncated={rows.length >= MAX_WEEK_ROWS}
       loadError={error?.message ?? null}

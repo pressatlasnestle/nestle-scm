@@ -84,6 +84,55 @@ async function main() {
     stories: storiesForTopThemes(coded, topThemes(themes, 3)),
     narrative: parseStoredNarrative(report?.analysis_narrative),
     codedTotal: coded.length,
+
+    // Representative values for the manually-entered cards, so their layout can
+    // be looked at without writing anything to the real tables. Obviously
+    // rounded rather than realistic — these must never be mistakable for
+    // transcribed Linerlytica figures if a screenshot escapes.
+    sampleCongestion: {
+      week_of: week.start,
+      global_teu_waiting: 1_500_000,
+      global_pct_fleet: 4.8,
+      region_data: {
+        europe: 500_000,
+        north_america: 300_000,
+        north_asia: 400_000,
+        southeast_asia: 200_000,
+        south_america: 100_000,
+      },
+      entered_at: new Date(0).toISOString(),
+      entered_by: null,
+    },
+    sampleWaiting: {
+      week_of: week.start,
+      port_data: {
+        "Antwerp-Rotterdam": 1.8,
+        "Shanghai-Ningbo": 1.2,
+        "Singapore-Port Klang": 2.4,
+        "Los Angeles-Long Beach": 0.9,
+        "New York-Savannah": 1.5,
+        "Jebel Ali-Jeddah": 3,
+      },
+      entered_at: new Date(0).toISOString(),
+      entered_by: null,
+    },
+    // Deliberately a DIFFERENT month from the selected week, so the
+    // carried-forward note renders and can be read.
+    sampleReliability: {
+      month_of: `${week.start.slice(0, 4)}-07-01`,
+      glp_issue_number: 100,
+      global_reliability_pct: 65,
+      avg_delay_days: 4.5,
+      alliance_data: {
+        "Gemini Cooperation": 90,
+        "Ocean Alliance": 60,
+        "Premier Alliance": 55,
+        "MSC standalone": 70,
+        "2M": 50,
+      },
+      entered_at: new Date(0).toISOString(),
+      entered_by: null,
+    },
   };
 
   writeFileSync(join(outDir, "data.json"), JSON.stringify(payload, null, 2));
@@ -100,13 +149,42 @@ async function main() {
     `import { createRoot } from "react-dom/client";
 import { PolarityChart, ThemePolarityChart, VolumeChart } from "@/app/(admin)/analysis/charts";
 import { WordCloud } from "@/app/(admin)/analysis/WordCloud";
+import {
+  CongestionCard,
+  MissingCard,
+  ReliabilityCard,
+  WaitingTimeCard,
+} from "@/app/(admin)/analysis/OperationalCards";
 import { buildAnalysisPdf } from "@/lib/analysis/pdf";
 import data from "./data.json";
 
 const d = data as any;
+const noop = () => {};
 
 createRoot(document.getElementById("root")!).render(
   <div className="content">
+    {/* Manually-entered market cards, rendered from representative values so
+        the layout can be looked at. OperationalCards imports no server action,
+        which is what makes it bundleable here. */}
+    <div className="operational-head">
+      <div>
+        <div className="eyebrow">Market data · entered manually</div>
+        <p>Transcribed from Linerlytica and Sea-Intelligence, not derived from the article corpus below.</p>
+      </div>
+    </div>
+    <div className="chart-grid">
+      <CongestionCard week={d.week} row={d.sampleCongestion} onEdit={noop} />
+      <WaitingTimeCard week={d.week} row={d.sampleWaiting} onEdit={noop} />
+    </div>
+    <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+      <ReliabilityCard week={d.week} row={d.sampleReliability} onEdit={noop} />
+    </div>
+    <div className="chart-grid">
+      <MissingCard title="Port congestion" period={d.week.label} onAdd={noop} />
+    </div>
+
+    <div className="section-divider"><span>From the article corpus</span></div>
+
     <div className="chart-grid">
       <VolumeChart week={d.week} days={d.volume} />
       <PolarityChart week={d.week} shares={d.polarity} codedTotal={d.codedTotal} />
