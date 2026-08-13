@@ -351,6 +351,117 @@ export type Database = {
           },
         ]
       }
+      operational_congestion: {
+        Row: {
+          entered_at: string
+          entered_by: string | null
+          global_pct_fleet: number | null
+          global_teu_waiting: number | null
+          id: string
+          region_data: Json | null
+          week_of: string
+        }
+        Insert: {
+          entered_at?: string
+          entered_by?: string | null
+          global_pct_fleet?: number | null
+          global_teu_waiting?: number | null
+          id?: string
+          region_data?: Json | null
+          week_of: string
+        }
+        Update: {
+          entered_at?: string
+          entered_by?: string | null
+          global_pct_fleet?: number | null
+          global_teu_waiting?: number | null
+          id?: string
+          region_data?: Json | null
+          week_of?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "operational_congestion_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      operational_schedule_reliability: {
+        Row: {
+          alliance_data: Json | null
+          avg_delay_days: number | null
+          entered_at: string
+          entered_by: string | null
+          glp_issue_number: number | null
+          global_reliability_pct: number | null
+          id: string
+          month_of: string
+        }
+        Insert: {
+          alliance_data?: Json | null
+          avg_delay_days?: number | null
+          entered_at?: string
+          entered_by?: string | null
+          glp_issue_number?: number | null
+          global_reliability_pct?: number | null
+          id?: string
+          month_of: string
+        }
+        Update: {
+          alliance_data?: Json | null
+          avg_delay_days?: number | null
+          entered_at?: string
+          entered_by?: string | null
+          glp_issue_number?: number | null
+          global_reliability_pct?: number | null
+          id?: string
+          month_of?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "operational_schedule_reliability_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      operational_waiting_time: {
+        Row: {
+          entered_at: string
+          entered_by: string | null
+          id: string
+          port_data: Json | null
+          week_of: string
+        }
+        Insert: {
+          entered_at?: string
+          entered_by?: string | null
+          id?: string
+          port_data?: Json | null
+          week_of: string
+        }
+        Update: {
+          entered_at?: string
+          entered_by?: string | null
+          id?: string
+          port_data?: Json | null
+          week_of?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "operational_waiting_time_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
