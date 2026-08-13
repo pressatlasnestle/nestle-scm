@@ -997,14 +997,19 @@ tbody tr:hover td {
   color: var(--text);
   min-width: 230px;
 }
+/* Portalled to document.body and positioned from the input's viewport rect —
+   see PortCombobox. `fixed`, not `absolute`, because it no longer has the
+   input as an offset parent; and z-index above the modal overlay (50) because
+   it is now a sibling of the overlay rather than a descendant of it. */
 .grid-port-list {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 3px);
-  left: 0;
-  min-width: 260px;
+  position: fixed;
+  z-index: 70;
   max-height: 240px;
   overflow-y: auto;
+  /* The list scrolls, and a default scrollbar renders light against this dark
+     panel — it was the only part of the clipped dropdown that was visible. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
   background: var(--panel-raised);
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -1031,6 +1036,17 @@ tbody tr:hover td {
 .grid-port-list li.empty {
   color: var(--text-dim);
   cursor: default;
+}
+/* WebKit needs its own scrollbar rules; scrollbar-color above covers Firefox. */
+.grid-port-list::-webkit-scrollbar {
+  width: 8px;
+}
+.grid-port-list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+.grid-port-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Separates manually-entered market data from corpus-derived charts. */
