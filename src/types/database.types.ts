@@ -359,7 +359,7 @@ export type Database = {
           global_teu_waiting: number | null
           id: string
           region_data: Json | null
-          week_of: string
+          day_of: string
         }
         Insert: {
           entered_at?: string
@@ -368,7 +368,7 @@ export type Database = {
           global_teu_waiting?: number | null
           id?: string
           region_data?: Json | null
-          week_of: string
+          day_of: string
         }
         Update: {
           entered_at?: string
@@ -377,7 +377,7 @@ export type Database = {
           global_teu_waiting?: number | null
           id?: string
           region_data?: Json | null
-          week_of?: string
+          day_of?: string
         }
         Relationships: [
           {
@@ -430,32 +430,118 @@ export type Database = {
           },
         ]
       }
-      operational_waiting_time: {
+      operational_fleet_status: {
         Row: {
+          day_of: string
           entered_at: string
           entered_by: string | null
           id: string
-          port_data: Json | null
-          week_of: string
+          status_data: Json | null
         }
         Insert: {
+          day_of: string
           entered_at?: string
           entered_by?: string | null
           id?: string
-          port_data?: Json | null
-          week_of: string
+          status_data?: Json | null
         }
         Update: {
+          day_of?: string
           entered_at?: string
           entered_by?: string | null
           id?: string
-          port_data?: Json | null
-          week_of?: string
+          status_data?: Json | null
         }
         Relationships: [
           {
-            foreignKeyName: "operational_waiting_time_entered_by_fkey"
+            foreignKeyName: "operational_fleet_status_entered_by_fkey"
             columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      operational_port_congestion: {
+        Row: {
+          day_of: string
+          entered_at: string
+          entered_by: string | null
+          id: string
+          port_name: string
+          queue_berth_ratio: number | null
+          ships_anchorage: number | null
+          ships_port: number | null
+          teu_anchorage: number | null
+          teu_port: number | null
+        }
+        Insert: {
+          day_of: string
+          entered_at?: string
+          entered_by?: string | null
+          id?: string
+          port_name: string
+          queue_berth_ratio?: number | null
+          ships_anchorage?: number | null
+          ships_port?: number | null
+          teu_anchorage?: number | null
+          teu_port?: number | null
+        }
+        Update: {
+          day_of?: string
+          entered_at?: string
+          entered_by?: string | null
+          id?: string
+          port_name?: string
+          queue_berth_ratio?: number | null
+          ships_anchorage?: number | null
+          ships_port?: number | null
+          teu_anchorage?: number | null
+          teu_port?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "operational_port_congestion_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "operational_port_congestion_port_name_fkey"
+            columns: ["port_name"]
+            isOneToOne: false
+            referencedRelation: "ports"
+            referencedColumns: ["name"]
+          },
+        ]
+      }
+      ports: {
+        Row: {
+          added_by: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+        }
+        Insert: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+        }
+        Update: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ports_added_by_fkey"
+            columns: ["added_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]

@@ -84,14 +84,18 @@ async function main() {
     stories: storiesForTopThemes(coded, topThemes(themes, 3)),
     narrative: parseStoredNarrative(report?.analysis_narrative),
     codedTotal: coded.length,
+    weekDays: weekDays(week),
+    ports: (await client.from("ports").select("name").order("name")).data?.map((p) => p.name) ?? [],
 
     // Representative values for the manually-entered cards, so their layout can
     // be looked at without writing anything to the real tables. Obviously
     // rounded rather than realistic — these must never be mistakable for
     // transcribed Linerlytica figures if a screenshot escapes.
-    sampleCongestion: {
-      week_of: week.start,
-      global_teu_waiting: 1_500_000,
+    // A PARTIAL week — Monday, Wednesday, Friday only — so the daily chart can
+    // be checked for the thing that matters: three bars, not seven with zeros.
+    sampleCongestion: [0, 2, 4].map((offset) => ({
+      day_of: weekDays(week)[offset],
+      global_teu_waiting: 1_500_000 + offset * 100_000,
       global_pct_fleet: 4.8,
       region_data: {
         europe: 500_000,
@@ -102,20 +106,37 @@ async function main() {
       },
       entered_at: new Date(0).toISOString(),
       entered_by: null,
-    },
-    sampleWaiting: {
-      week_of: week.start,
-      port_data: {
-        "Antwerp-Rotterdam": 1.8,
-        "Shanghai-Ningbo": 1.2,
-        "Singapore-Port Klang": 2.4,
-        "Los Angeles-Long Beach": 0.9,
-        "New York-Savannah": 1.5,
-        "Jebel Ali-Jeddah": 3,
+    })),
+    // Overlapping on purpose: at port + at anchorage is far below active, which
+    // is exactly why these must be grouped and never stacked.
+    sampleFleet: [
+      {
+        day_of: weekDays(week)[4],
+        status_data: {
+          "Ships at port": { ships: 1165, teu: 7_000_000 },
+          "Active Ships": { ships: 5426, teu: 31_000_000 },
+          "Inactive Ships": { ships: 700, teu: 1_500_000 },
+          "Ships at anchorage": { ships: 1180, teu: 6_000_000 },
+          "Ships in shipyard": { ships: 300, teu: 900_000 },
+        },
+        entered_at: new Date(0).toISOString(),
+        entered_by: null,
       },
+    ],
+    // Five ports including the longest and most punctuated names in the seed,
+    // and a ratio that deliberately disagrees with the two ship counts.
+    samplePorts: [
+      { port_name: "Shanghai/Ningbo", ships_anchorage: 67, ships_port: 19, teu_anchorage: 500_000, teu_port: 250_000, queue_berth_ratio: 3.5 },
+      { port_name: "Busan", ships_anchorage: 122, ships_port: 48, teu_anchorage: 400_000, teu_port: 200_000, queue_berth_ratio: 2.54 },
+      { port_name: "Antwerp", ships_anchorage: 17, ships_port: 21, teu_anchorage: 90_000, teu_port: 120_000, queue_berth_ratio: 0.81 },
+      { port_name: "Gibraltar (Algeciras/Tanger Med)", ships_anchorage: 21, ships_port: 8, teu_anchorage: 70_000, teu_port: 40_000, queue_berth_ratio: 2.8 },
+      { port_name: "LA/LB", ships_anchorage: 9, ships_port: 14, teu_anchorage: 60_000, teu_port: 110_000, queue_berth_ratio: 0.64 },
+    ].map((p) => ({
+      ...p,
+      day_of: weekDays(week)[4],
       entered_at: new Date(0).toISOString(),
       entered_by: null,
-    },
+    })),
     // Deliberately a DIFFERENT month from the selected week, so the
     // carried-forward note renders and can be read.
     sampleReliability: {
@@ -151,10 +172,13 @@ import { PolarityChart, ThemePolarityChart, VolumeChart } from "@/app/(admin)/an
 import { WordCloud } from "@/app/(admin)/analysis/WordCloud";
 import {
   CongestionCard,
+  FleetStatusCard,
   MissingCard,
+  PortCongestionCard,
   ReliabilityCard,
-  WaitingTimeCard,
 } from "@/app/(admin)/analysis/OperationalCards";
+import { OperationalGrid } from "@/app/(admin)/analysis/OperationalGrid";
+import { ToastProvider } from "@/components/Toast";
 import { buildAnalysisPdf } from "@/lib/analysis/pdf";
 import data from "./data.json";
 
@@ -162,6 +186,7 @@ const d = data as any;
 const noop = () => {};
 
 createRoot(document.getElementById("root")!).render(
+  <ToastProvider>
   <div className="content">
     {/* Manually-entered market cards, rendered from representative values so
         the layout can be looked at. OperationalCards imports no server action,
@@ -173,8 +198,11 @@ createRoot(document.getElementById("root")!).render(
       </div>
     </div>
     <div className="chart-grid">
-      <CongestionCard week={d.week} row={d.sampleCongestion} onEdit={noop} />
-      <WaitingTimeCard week={d.week} row={d.sampleWaiting} onEdit={noop} />
+      <CongestionCard week={d.week} rows={d.sampleCongestion} onEdit={noop} />
+      <FleetStatusCard week={d.week} rows={d.sampleFleet} onEdit={noop} />
+    </div>
+    <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+      <PortCongestionCard week={d.week} rows={d.samplePorts} onEdit={noop} />
     </div>
     <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
       <ReliabilityCard week={d.week} row={d.sampleReliability} onEdit={noop} />
@@ -182,6 +210,17 @@ createRoot(document.getElementById("root")!).render(
     <div className="chart-grid">
       <MissingCard title="Port congestion" period={d.week.label} onAdd={noop} />
     </div>
+
+    {/* The entry grid, open, at full width with all five ports and seven days. */}
+    <OperationalGrid
+      week={d.week}
+      days={d.weekDays}
+      ports={d.ports}
+      congestion={d.sampleCongestion}
+      fleet={d.sampleFleet}
+      portCongestion={d.samplePorts}
+      onClose={noop}
+    />
 
     <div className="section-divider"><span>From the article corpus</span></div>
 
@@ -194,6 +233,7 @@ createRoot(document.getElementById("root")!).render(
       <WordCloud week={d.week} words={d.words} shown={d.wordsShown} />
     </div>
   </div>
+  </ToastProvider>
 );
 
 // Exposed so the verification step can build the REAL PDF — same function the
@@ -254,6 +294,22 @@ createRoot(document.getElementById("root")!).render(
 `
   );
 
+  /**
+   * A stand-in for the server actions.
+   *
+   * OperationalGrid imports them, and a "use server" module cannot be bundled
+   * for a browser — but the grid is exactly the surface that most needs
+   * looking at, being 300 hand-typed values wide. Aliasing the actions to
+   * no-ops lets the REAL grid render with the REAL data shapes; only Save is
+   * inert, and Save is covered by check:operational instead.
+   */
+  writeFileSync(
+    join(outDir, "action-stub.ts"),
+    `export async function saveOperationalWeek() { return { ok: true, daysWritten: 0, portRowsWritten: 0 }; }
+export async function saveScheduleReliability() { return { ok: true }; }
+`
+  );
+
   const bundle = join(outDir, "bundle.js");
 
   // esbuild's JS API rather than its CLI. The CLI needs
@@ -269,6 +325,20 @@ createRoot(document.getElementById("root")!).render(
     jsx: "automatic",
     define: { "process.env.NODE_ENV": JSON.stringify("production") },
     alias: { "@": resolve(process.cwd(), "src") },
+    plugins: [
+      {
+        // OperationalGrid imports the actions as "./operational-actions", and
+        // esbuild aliases match the specifier exactly as written, so a path
+        // alias never fires. A resolve plugin matches on the resolved name
+        // instead, whichever way it was imported.
+        name: "stub-server-actions",
+        setup(build) {
+          build.onResolve({ filter: /operational-actions$/ }, () => ({
+            path: join(outDir, "action-stub.ts"),
+          }));
+        },
+      },
+    ],
     logLevel: "warning",
   });
 

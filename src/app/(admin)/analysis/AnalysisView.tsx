@@ -16,8 +16,9 @@ import type {
 import type { WeekNarrative } from "@/lib/analysis/narrative";
 import type {
   CongestionRow,
+  FleetStatusRow,
+  PortCongestionRow,
   ScheduleReliabilityRow,
-  WaitingTimeRow,
 } from "@/lib/analysis/operational";
 import { OperationalSection } from "./OperationalCharts";
 import {
@@ -100,8 +101,10 @@ export function AnalysisView({
   narrative,
   narrativeGeneratedAt,
   congestion,
-  waitingTime,
+  fleet,
+  portCongestion,
   reliability,
+  ports,
   codedTotal,
   truncated,
   loadError,
@@ -118,9 +121,11 @@ export function AnalysisView({
   stories: ThemeStories[];
   narrative: WeekNarrative | null;
   narrativeGeneratedAt: string | null;
-  congestion: CongestionRow | null;
-  waitingTime: WaitingTimeRow | null;
+  congestion: CongestionRow[];
+  fleet: FleetStatusRow[];
+  portCongestion: PortCongestionRow[];
   reliability: ScheduleReliabilityRow | null;
+  ports: string[];
   codedTotal: number;
   truncated: boolean;
   loadError: string | null;
@@ -286,8 +291,10 @@ export function AnalysisView({
               make a reader assume one provenance for both. */}
           <OperationalSection
             week={week}
+            ports={ports}
             congestion={congestion}
-            waitingTime={waitingTime}
+            fleet={fleet}
+            portCongestion={portCongestion}
             reliability={reliability}
             canCurate={canCurate}
           />

@@ -102,30 +102,50 @@ export default async function AnalysisPage({
   // congestion figures must see them on the next load, and a module-level
   // cache would survive inside a warm serverless instance and keep serving the
   // absence.
-  const [{ data: congestion }, { data: waitingTime }, { data: reliability }] =
-    await Promise.all([
-      supabase
-        .from("operational_congestion")
-        .select("week_of, global_teu_waiting, global_pct_fleet, region_data, entered_at, entered_by")
-        .eq("week_of", week.start)
-        .maybeSingle(),
-      supabase
-        .from("operational_waiting_time")
-        .select("week_of, port_data, entered_at, entered_by")
-        .eq("week_of", week.start)
-        .maybeSingle(),
-      // Monthly, and carried forward: the most recent month AT OR BEFORE the
-      // selected week. Bounded rather than simply "latest" so that navigating
-      // back to an older week cannot show figures published after it — a
-      // carried-forward number is fine, a time-travelling one is not.
-      supabase
-        .from("operational_schedule_reliability")
-        .select("month_of, glp_issue_number, global_reliability_pct, avg_delay_days, alliance_data, entered_at, entered_by")
-        .lte("month_of", `${week.end.slice(0, 7)}-01`)
-        .order("month_of", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+  // The daily series are 7-day RANGE queries now, not single-row lookups. Days
+  // with no entry simply do not come back, which is what makes a partial week
+  // plot the days it has rather than zeros for the rest.
+  const [
+    { data: congestion },
+    { data: fleet },
+    { data: portCongestion },
+    { data: reliability },
+    { data: portList },
+  ] = await Promise.all([
+    supabase
+      .from("operational_congestion")
+      .select("day_of, global_teu_waiting, global_pct_fleet, region_data, entered_at, entered_by")
+      .gte("day_of", week.start)
+      .lte("day_of", week.end)
+      .order("day_of"),
+    supabase
+      .from("operational_fleet_status")
+      .select("day_of, status_data, entered_at, entered_by")
+      .gte("day_of", week.start)
+      .lte("day_of", week.end)
+      .order("day_of"),
+    supabase
+      .from("operational_port_congestion")
+      .select("day_of, port_name, ships_anchorage, ships_port, teu_anchorage, teu_port, queue_berth_ratio, entered_at, entered_by")
+      .gte("day_of", week.start)
+      .lte("day_of", week.end)
+      .order("day_of"),
+    // Monthly, and carried forward: the most recent month AT OR BEFORE the
+    // selected week. Bounded rather than simply "latest" so that navigating
+    // back to an older week cannot show figures published after it — a
+    // carried-forward number is fine, a time-travelling one is not.
+    supabase
+      .from("operational_schedule_reliability")
+      .select("month_of, glp_issue_number, global_reliability_pct, avg_delay_days, alliance_data, entered_at, entered_by")
+      .lte("month_of", `${week.end.slice(0, 7)}-01`)
+      .order("month_of", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // The entry grid's port vocabulary. Only fetched for the picker, so
+    // inactive names are excluded — retiring a port stops it being offered
+    // without rewriting the rows already recorded against it.
+    supabase.from("ports").select("name").eq("is_active", true).order("name"),
+  ]);
 
   const rows = (data ?? []) as WeekArticle[];
 
@@ -149,9 +169,11 @@ export default async function AnalysisPage({
       stories={storiesForTopThemes(coded, top)}
       narrative={parseStoredNarrative(report?.analysis_narrative)}
       narrativeGeneratedAt={report?.analysis_generated_at ?? null}
-      congestion={congestion ?? null}
-      waitingTime={waitingTime ?? null}
+      congestion={congestion ?? []}
+      fleet={fleet ?? []}
+      portCongestion={portCongestion ?? []}
       reliability={reliability ?? null}
+      ports={(portList ?? []).map((p) => p.name)}
       codedTotal={coded.length}
       truncated={rows.length >= MAX_WEEK_ROWS}
       loadError={error?.message ?? null}

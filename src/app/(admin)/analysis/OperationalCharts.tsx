@@ -2,100 +2,75 @@
 
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/Toast";
-import type { Week } from "@/lib/analysis/week-period";
+import { weekDays, type Week } from "@/lib/analysis/week-period";
 import {
-  CONGESTION_REGIONS,
   formatMonth,
   monthOf,
   readNumber,
   readObject,
   RELIABILITY_ALLIANCES,
-  WAITING_TIME_PORTS,
   type CongestionRow,
+  type FleetStatusRow,
+  type PortCongestionRow,
   type ScheduleReliabilityRow,
-  type WaitingTimeRow,
 } from "@/lib/analysis/operational";
 import {
   CongestionCard,
+  FleetStatusCard,
   MissingCard,
+  PortCongestionCard,
   ReliabilityCard,
-  WaitingTimeCard,
 } from "./OperationalCards";
+import { OperationalGrid } from "./OperationalGrid";
 import { OperationalEditModal, type FieldGroup } from "./OperationalEditModal";
-import {
-  saveCongestion,
-  saveScheduleReliability,
-  saveWaitingTime,
-} from "./operational-actions";
+import { saveScheduleReliability } from "./operational-actions";
 
 /**
- * The manually-entered market section: which cards exist, and the dialogs that
- * write them. Rendering lives in OperationalCards.tsx.
+ * The manually-entered market section: which cards exist, and the two entry
+ * surfaces behind them.
  *
- * ABSENT, NOT EMPTY. Congestion and waiting time appear only when the selected
- * week has an entry. There is no such thing as a week with zero congestion, so
- * a card of zeros because nobody has typed the figures yet would be a false
- * statement about the market. A curate user still has a way in — a dashed
- * placeholder offering data entry — and a read user simply sees nothing, which
- * is correct: they could not fill it anyway.
+ * ONE GRID for everything daily — congestion, fleet status and per-port
+ * figures are all read off the same Linerlytica screenshots on the same visit,
+ * so they are entered together. Schedule reliability keeps its own dialog: it
+ * is monthly, from a different report, and folding it into a weekly grid would
+ * invite entering it seven times.
+ *
+ * ABSENT, NOT EMPTY. A card appears only when its period has data. There is no
+ * such thing as a week with zero congestion, so a card of zeros because nobody
+ * has typed the figures would be a false statement about the market. Curate
+ * users get a placeholder offering entry; read users see nothing at all and no
+ * entry affordance anywhere.
  */
 
 export function OperationalSection({
   week,
+  ports,
   congestion,
-  waitingTime,
+  fleet,
+  portCongestion,
   reliability,
   canCurate,
 }: {
   week: Week;
-  congestion: CongestionRow | null;
-  waitingTime: WaitingTimeRow | null;
+  ports: string[];
+  congestion: CongestionRow[];
+  fleet: FleetStatusRow[];
+  portCongestion: PortCongestionRow[];
   reliability: ScheduleReliabilityRow | null;
   canCurate: boolean;
 }) {
   const toast = useToast();
   const [, startTransition] = useTransition();
-  const [editing, setEditing] = useState<
-    "congestion" | "waiting" | "reliability" | null
-  >(null);
+  const [gridOpen, setGridOpen] = useState(false);
+  const [monthOpen, setMonthOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  function run(action: () => Promise<{ ok: boolean; error?: string }>) {
-    setBusy(true);
-    startTransition(async () => {
-      const res = await action();
-      setBusy(false);
-      if (res.ok) {
-        setEditing(null);
-        // revalidatePath in the action re-renders the panel, so the new figures
-        // are on screen without a manual refresh.
-        toast.success("Saved.");
-      } else {
-        toast.error(res.error ?? "Could not save.");
-      }
-    });
-  }
+  const openGrid = () => setGridOpen(true);
 
-  // --- Pre-fill, so re-editing is not blind re-entry ------------------------
+  const reliabilityMonth = reliability?.month_of ?? monthOf(week.start);
+
   const asText = (v: number | null | undefined) =>
     v === null || v === undefined ? "" : String(v);
-
-  const congestionInitial: Record<string, string> = {
-    global_teu_waiting: asText(congestion?.global_teu_waiting),
-    global_pct_fleet: asText(congestion?.global_pct_fleet),
-  };
-  for (const r of CONGESTION_REGIONS) {
-    congestionInitial[r.key] = asText(
-      readNumber(readObject(congestion?.region_data ?? null)[r.key])
-    );
-  }
-
-  const waitingInitial: Record<string, string> = {};
-  for (const p of WAITING_TIME_PORTS) {
-    waitingInitial[p] = asText(
-      readNumber(readObject(waitingTime?.port_data ?? null)[p])
-    );
-  }
 
   const reliabilityInitial: Record<string, string> = {
     glp_issue_number: asText(reliability?.glp_issue_number),
@@ -108,19 +83,6 @@ export function OperationalSection({
     );
   }
 
-  /**
-   * Which month the reliability form writes.
-   *
-   * The month of the entry on screen when one is showing — so editing a
-   * carried-forward July entry from an August week corrects JULY, which is the
-   * row being looked at. With nothing on screen, it falls back to the selected
-   * week's own month, which is the month someone is most likely entering.
-   * Either way the dialog states it outright.
-   */
-  const reliabilityMonth = reliability?.month_of ?? monthOf(week.start);
-
-  const showPlaceholders = canCurate;
-
   return (
     <>
       <div className="operational-head">
@@ -128,118 +90,93 @@ export function OperationalSection({
           <div className="eyebrow">Market data · entered manually</div>
           <p>
             Transcribed from Linerlytica and Sea-Intelligence, not derived from
-            the article corpus below. A card appears only once its period has
-            been entered.
+            the article corpus below. Daily figures are entered a week at a
+            time; a day with no entry is omitted rather than shown as zero.
           </p>
         </div>
+        {canCurate && (
+          <button type="button" className="btn btn-sm btn-primary" onClick={openGrid}>
+            ✎ Enter week
+          </button>
+        )}
       </div>
 
       <div className="chart-grid">
-        {congestion ? (
+        {congestion.length > 0 ? (
           <CongestionCard
             week={week}
-            row={congestion}
-            onEdit={canCurate ? () => setEditing("congestion") : undefined}
+            rows={congestion}
+            onEdit={canCurate ? openGrid : undefined}
           />
         ) : (
-          showPlaceholders && (
-            <MissingCard
-              title="Port congestion"
-              period={week.label}
-              onAdd={() => setEditing("congestion")}
-            />
+          canCurate && (
+            <MissingCard title="Port congestion" period={week.label} onAdd={openGrid} label="✎ Enter week" />
           )
         )}
 
-        {waitingTime ? (
-          <WaitingTimeCard
+        {fleet.length > 0 ? (
+          <FleetStatusCard week={week} rows={fleet} onEdit={canCurate ? openGrid : undefined} />
+        ) : (
+          canCurate && (
+            <MissingCard title="Fleet status" period={week.label} onAdd={openGrid} label="✎ Enter week" />
+          )
+        )}
+      </div>
+
+      <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+        {portCongestion.length > 0 ? (
+          <PortCongestionCard
             week={week}
-            row={waitingTime}
-            onEdit={canCurate ? () => setEditing("waiting") : undefined}
+            rows={portCongestion}
+            onEdit={canCurate ? openGrid : undefined}
           />
         ) : (
-          showPlaceholders && (
-            <MissingCard
-              title="Vessel waiting time"
-              period={week.label}
-              onAdd={() => setEditing("waiting")}
-            />
+          canCurate && (
+            <MissingCard title="Congestion by port" period={week.label} onAdd={openGrid} label="✎ Enter week" />
           )
         )}
       </div>
 
       {/*
-        Full width, but still inside a .chart-grid rather than a plain block.
-        Recharts' ResponsiveContainer measures its parent, and in a plain block
-        wrapper it measured 0 and rendered no chart at all — figures and axes
-        absent, card otherwise intact. Keeping every chart in the same layout
-        context it was designed against removes that whole class of problem
-        instead of relying on the measurement working out.
+        Full width, but inside a .chart-grid rather than a plain block. Recharts'
+        ResponsiveContainer measures its parent, and in a plain block wrapper it
+        measured 0 and drew no chart at all — figures present, axes and bars
+        absent. Keeping every chart in the same layout context removes that
+        whole class of problem.
       */}
-      {reliability ? (
-        <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+      <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+        {reliability ? (
           <ReliabilityCard
             week={week}
             row={reliability}
-            onEdit={canCurate ? () => setEditing("reliability") : undefined}
+            onEdit={canCurate ? () => setMonthOpen(true) : undefined}
           />
-        </div>
-      ) : (
-        showPlaceholders && (
-          <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+        ) : (
+          canCurate && (
             <MissingCard
               title="Schedule reliability"
               period="any month yet"
-              onAdd={() => setEditing("reliability")}
+              onAdd={() => setMonthOpen(true)}
+              label="✎ Enter month"
             />
-          </div>
-        )
+          )
+        )}
+      </div>
+
+      {gridOpen && (
+        <OperationalGrid
+          week={week}
+          days={weekDays(week)}
+          ports={ports}
+          congestion={congestion}
+          fleet={fleet}
+          portCongestion={portCongestion}
+          onClose={() => setGridOpen(false)}
+        />
       )}
 
       <OperationalEditModal
-        open={editing === "congestion"}
-        title="Port congestion"
-        periodLabel={`Week of ${week.label}`}
-        busy={busy}
-        initial={congestionInitial}
-        groups={CONGESTION_GROUPS}
-        onCancel={() => setEditing(null)}
-        onSave={(values) =>
-          run(() =>
-            saveCongestion({
-              weekStart: week.start,
-              globalTeuWaiting: values.global_teu_waiting,
-              globalPctFleet: values.global_pct_fleet,
-              regions: Object.fromEntries(
-                CONGESTION_REGIONS.map((r) => [r.key, values[r.key]])
-              ),
-            })
-          )
-        }
-      />
-
-      <OperationalEditModal
-        open={editing === "waiting"}
-        title="Vessel waiting time"
-        periodLabel={`Week of ${week.label}`}
-        busy={busy}
-        initial={waitingInitial}
-        groups={WAITING_GROUPS}
-        onCancel={() => setEditing(null)}
-        onSave={(values) =>
-          run(() =>
-            saveWaitingTime({
-              weekStart: week.start,
-              ports: Object.fromEntries(
-                WAITING_TIME_PORTS.map((p) => [p, values[p]])
-              ),
-            })
-          )
-        }
-      />
-
-      <OperationalEditModal
-        open={editing === "reliability"}
+        open={monthOpen}
         title="Schedule reliability"
         // Spelled out because the grain differs from the rest of the panel:
         // this writes a MONTH while the selector is on a week.
@@ -247,10 +184,11 @@ export function OperationalSection({
         busy={busy}
         initial={reliabilityInitial}
         groups={RELIABILITY_GROUPS}
-        onCancel={() => setEditing(null)}
-        onSave={(values) =>
-          run(() =>
-            saveScheduleReliability({
+        onCancel={() => setMonthOpen(false)}
+        onSave={(values) => {
+          setBusy(true);
+          startTransition(async () => {
+            const res = await saveScheduleReliability({
               monthStart: reliabilityMonth,
               glpIssueNumber: values.glp_issue_number,
               globalReliabilityPct: values.global_reliability_pct,
@@ -258,44 +196,20 @@ export function OperationalSection({
               alliances: Object.fromEntries(
                 RELIABILITY_ALLIANCES.map((a) => [a, values[a]])
               ),
-            })
-          )
-        }
+            });
+            setBusy(false);
+            if (res.ok) {
+              setMonthOpen(false);
+              toast.success("Saved.");
+            } else {
+              toast.error(res.error);
+            }
+          });
+        }}
       />
     </>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Form definitions
-// ---------------------------------------------------------------------------
-
-const CONGESTION_GROUPS: FieldGroup[] = [
-  {
-    title: "Global",
-    fields: [
-      { key: "global_teu_waiting", label: "Capacity waiting", unit: "TEU" },
-      { key: "global_pct_fleet", label: "Share of total fleet", unit: "%" },
-    ],
-  },
-  {
-    title: "By region",
-    hint: "Capacity waiting at anchor, in TEU.",
-    fields: CONGESTION_REGIONS.map((r) => ({
-      key: r.key,
-      label: r.label,
-      unit: "TEU",
-    })),
-  },
-];
-
-const WAITING_GROUPS: FieldGroup[] = [
-  {
-    title: "By port cluster",
-    hint: "Average days at anchor. Clusters follow Linerlytica's own grouping.",
-    fields: WAITING_TIME_PORTS.map((p) => ({ key: p, label: p, unit: "days" })),
-  },
-];
 
 const RELIABILITY_GROUPS: FieldGroup[] = [
   {
@@ -312,11 +226,7 @@ const RELIABILITY_GROUPS: FieldGroup[] = [
     title: "Global",
     fields: [
       { key: "global_reliability_pct", label: "On-time arrivals", unit: "%" },
-      {
-        key: "avg_delay_days",
-        label: "Average delay for late arrivals",
-        unit: "days",
-      },
+      { key: "avg_delay_days", label: "Average delay for late arrivals", unit: "days" },
     ],
   },
   {

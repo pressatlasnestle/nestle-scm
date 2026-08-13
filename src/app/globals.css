@@ -860,6 +860,179 @@ tbody tr:hover td {
   border-bottom: none;
 }
 
+/* Queue/berth ratios under the per-port chart. Shown as published. */
+.port-ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 10px 2px 4px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 8px;
+}
+.port-ratios > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.port-ratios .ratio-value {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--indigo);
+}
+.port-ratios .ratio-port {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* ---------- Weekly entry grid ----------
+   Wider than the standard modal: seven day columns plus a metric label column
+   do not fit the dialog width the confirm modals use.
+
+   Written as .modal.grid-modal, not .grid-modal, on purpose. This block sits
+   ABOVE the .modal rule in this file, so a single-class selector loses the
+   max-width on source order alone — the grid rendered at 436px until the
+   specificity was raised. */
+.modal.grid-modal {
+  max-width: 1180px;
+  width: 96%;
+}
+.grid-scroll {
+  overflow: auto;
+  max-height: 62vh;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.entry-grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+.entry-grid th,
+.entry-grid td {
+  padding: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.entry-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel-raised);
+  padding: 8px 10px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* The metric column stays visible while the day columns scroll — without it a
+   reader loses track of which row they are typing into. */
+.entry-grid .metric-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+  text-align: left;
+  padding: 5px 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 210px;
+}
+.entry-grid thead .metric-col {
+  z-index: 3;
+  background: var(--panel-raised);
+}
+.entry-grid .metric-col .unit {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.entry-grid .group-row th {
+  background: var(--panel-raised);
+  text-align: left;
+  padding: 7px 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--indigo);
+  position: sticky;
+  left: 0;
+}
+.entry-grid .port-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.entry-grid input {
+  width: 100%;
+  min-width: 84px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--line-soft);
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  text-align: right;
+}
+.entry-grid input:focus {
+  outline: none;
+  background: var(--panel-raised);
+  box-shadow: inset 0 0 0 1px var(--teal);
+}
+
+/* Port typeahead inside the grid's group header. */
+.grid-port-input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  color: var(--text);
+  min-width: 230px;
+}
+.grid-port-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 3px);
+  left: 0;
+  min-width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px;
+  margin: 0;
+  list-style: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.grid-port-list li {
+  padding: 6px 9px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-family: var(--font-body);
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.grid-port-list li.highlighted {
+  background: var(--teal-dim);
+  color: var(--teal);
+}
+.grid-port-list li.empty {
+  color: var(--text-dim);
+  cursor: default;
+}
+
 /* Separates manually-entered market data from corpus-derived charts. */
 .section-divider {
   display: flex;
