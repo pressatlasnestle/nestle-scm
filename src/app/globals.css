@@ -1486,75 +1486,6 @@ tbody tr:hover td {
   color: var(--text-dim);
   margin-top: 6px;
 }
-.frozen-text {
-  background: var(--panel-raised);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  padding: 11px 13px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-muted);
-  white-space: pre-wrap;
-}
-.frozen-actions {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-muted);
-}
-
-/* ---------- Watch list & actions repeaters ---------- */
-.watch-row {
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 10px;
-  background: var(--panel-raised);
-}
-.watch-row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 9px;
-}
-.watch-row-index {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 1px;
-  color: var(--indigo);
-}
-.watch-field {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 7px;
-}
-.watch-field > span {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-.action-row {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.action-index {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--indigo);
-}
-.action-controls {
-  display: flex;
-  gap: 3px;
-}
-
 /* ---------- Press picker ---------- */
 .press-summary {
   font-size: 12px;
@@ -1692,4 +1623,72 @@ tbody tr:hover td {
   flex-wrap: wrap;
   padding: 13px 18px;
   border-top: 1px solid var(--line-soft);
+}
+
+/* ---------- Newsletter section cards ----------
+   One card per written section: title, who wrote it, the text, and the two
+   controls. Every section looks the same because every section IS the same
+   shape now — five bespoke editors became one. */
+.composer-col-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.composer-col-head > div {
+  min-width: 0;
+}
+.section-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--panel-raised);
+  padding: 14px 15px;
+  margin-bottom: 12px;
+}
+.section-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.section-card-actions {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+/* Who wrote what is on screen. "Edited by you" is the state Generate leaves
+   alone, so it is the one that gets the colour. */
+.section-provenance {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.section-provenance.edited {
+  color: var(--teal);
+}
+.section-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre-wrap;
+  padding: 11px 13px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+.section-empty {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  padding: 13px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+.section-empty b {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.section-protected {
+  color: var(--teal);
 }

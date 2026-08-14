@@ -59,6 +59,13 @@ import {
   type PressCandidate,
   type PressSelection,
 } from "./press";
+import {
+  findSection,
+  hasBody,
+  renderableSections,
+  type EditionSection,
+  type SectionKey,
+} from "./sections";
 
 // ---------------------------------------------------------------------------
 // Readings and deltas
@@ -355,94 +362,38 @@ export type ReliabilityBlock = {
 };
 
 // ---------------------------------------------------------------------------
-// Sections
+// Blocks — what the edition is made of
+//
+// An edition is an ordered run of BLOCKS. Some are data (a table or a bar
+// chart built from the figures); some are prose written by the model and
+// editable by hand, and those live in `sections`. The five prose keys here are
+// exactly the SectionKeys in sections.ts, so "is this block present" is the
+// same question as "does that section have a body".
 // ---------------------------------------------------------------------------
 
-export const SECTION_TITLES = {
-  headline: "Headline read",
+export const BLOCK_TITLES = {
   glance: "At a glance",
   regional: "Regional congestion",
   ports: "Port watch",
   fleet: "Fleet status",
   reliability: "Schedule reliability",
   press: "What moved in the press",
-  watchList: "Watch list",
-  actions: "Recommended actions",
 } as const;
 
-export type SectionKey = keyof typeof SECTION_TITLES;
+export type BlockKey = keyof typeof BLOCK_TITLES;
 
-export type SectionState = {
-  key: SectionKey;
+export type BlockState = {
+  key: BlockKey;
   title: string;
   present: boolean;
-  /** Why it was dropped. Shown in the draft view; never in the email. */
+  /**
+   * Plain-English reason it was left out, for the composer only. It never
+   * reaches the email — the email is simply shorter. The curator needs to know
+   * a gap was a data gap and not a bug; the reader does not need to know there
+   * was a gap at all.
+   */
   reason: string | null;
 };
-
-// ---------------------------------------------------------------------------
-// The authored half
-// ---------------------------------------------------------------------------
-
-export type WatchListEntry = {
-  risk: string;
-  lanes: string;
-  window: string;
-  direction: string;
-};
-
-export type Authored = {
-  headlineRead: string;
-  regionalCommentary: string;
-  reliabilityNote: string;
-  watchList: WatchListEntry[];
-  recommendedActions: string[];
-};
-
-export const EMPTY_AUTHORED: Authored = {
-  headlineRead: "",
-  regionalCommentary: "",
-  reliabilityNote: "",
-  watchList: [],
-  recommendedActions: [],
-};
-
-function text(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-/** Reads the authored columns back out of a row, defensively. */
-export function readAuthored(row: {
-  headline_read: string | null;
-  regional_commentary: string | null;
-  reliability_note: string | null;
-  watch_list: Json | null;
-  recommended_actions: Json | null;
-}): Authored {
-  const watch = Array.isArray(row.watch_list) ? row.watch_list : [];
-  const actions = Array.isArray(row.recommended_actions)
-    ? row.recommended_actions
-    : [];
-
-  return {
-    headlineRead: text(row.headline_read),
-    regionalCommentary: text(row.regional_commentary),
-    reliabilityNote: text(row.reliability_note),
-    watchList: watch
-      .map((entry) => {
-        const e = readObject(entry as Json);
-        return {
-          risk: text(e.risk),
-          lanes: text(e.lanes),
-          window: text(e.window),
-          direction: text(e.direction),
-        };
-      })
-      // A row with nothing in it is not a watch-list entry.
-      .filter((e) => e.risk || e.lanes || e.window || e.direction),
-    recommendedActions: actions.map(text).filter(Boolean),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Assembling an edition
@@ -464,10 +415,21 @@ export type EditionInput = {
   includedArticleIds: string[] | null;
   /** Whether any operational row exists dated before this week. */
   hasHistoryBefore: boolean;
+  /**
+   * True when the week has not finished yet.
+   *
+   * Passed in rather than derived from a clock inside buildGenerated(), which
+   * has to stay pure: the send action freezes what it computes, and a figure
+   * that depends on the moment of rendering is the one thing a frozen record
+   * cannot contain.
+   */
+  partialWeek: boolean;
 };
 
 export type Generated = {
   week: Week;
+  /** The week is still running, so anything COUNTED across it is incomplete. */
+  partialWeek: boolean;
   glance: GlanceRow[];
   regions: RegionBar[];
   /** The day the regional breakdown was read from. */
@@ -482,8 +444,10 @@ export type Generated = {
 
 export type Edition = {
   generated: Generated;
-  authored: Authored;
-  sections: SectionState[];
+  /** The written sections, as stored. Rendered by key into their blocks. */
+  sections: EditionSection[];
+  /** Which blocks the edition carries, and why the rest were left out. */
+  blocks: BlockState[];
 };
 
 /**
@@ -688,6 +652,7 @@ export function buildGenerated(input: EditionInput): Generated {
 
   return {
     week,
+    partialWeek: input.partialWeek,
     glance,
     regions: regionBars(congestionNow, congestionThen, priorWeekLabel, hasHistoryBefore),
     regionsAsAt: congestionNow?.day_of ?? null,
@@ -708,66 +673,61 @@ export function buildGenerated(input: EditionInput): Generated {
  * the curator knows what is missing and can go and enter it; the email is
  * simply shorter.
  */
-export function sectionStates(
-  generated: Generated,
-  authored: Authored
-): SectionState[] {
-  const state = (
-    key: SectionKey,
-    present: boolean,
-    reason: string
-  ): SectionState => ({
+export function dataBlocks(generated: Generated): BlockState[] {
+  const state = (key: BlockKey, present: boolean, reason: string): BlockState => ({
     key,
-    title: SECTION_TITLES[key],
+    title: BLOCK_TITLES[key],
     present,
     reason: present ? null : reason,
   });
 
   return [
     state(
-      "headline",
-      authored.headlineRead.length > 0,
-      "Nothing written yet. This is the read the edition is sent for."
-    ),
-    state(
       "glance",
       generated.glance.length > 0,
-      "No congestion, fleet or reliability figure has been entered for this week."
+      "No congestion, fleet or reliability figures entered for this week."
     ),
     state(
       "regional",
       generated.regions.length > 0,
-      "No regional breakdown was entered on any day of this week."
+      "No regional figures entered for this week."
     ),
-    state(
-      "ports",
-      generated.ports.length > 0,
-      "No per-port figures were entered on any day of this week."
-    ),
-    state(
-      "fleet",
-      generated.fleet.length > 0,
-      "No fleet status was entered on any day of this week."
-    ),
+    state("ports", generated.ports.length > 0, "No port figures entered for this week."),
+    state("fleet", generated.fleet.length > 0, "No fleet figures entered for this week."),
     state(
       "reliability",
       generated.reliability !== null,
-      "No Global Liner Performance figures have been entered for this month or any earlier one."
+      "No schedule reliability figures entered for this month or any earlier one."
     ),
     state(
       "press",
       generated.press.shown > 0,
       generated.press.candidates === 0
-        ? "No coded article was published in this week."
-        : "Every candidate article has been toggled out."
-    ),
-    state("watchList", authored.watchList.length > 0, "Nothing written yet."),
-    state(
-      "actions",
-      authored.recommendedActions.length > 0,
-      "Nothing written yet."
+        ? "No articles published in this week have been coded yet."
+        : "Every article has been switched off."
     ),
   ];
+}
+
+export function blockPresent(blocks: BlockState[], key: BlockKey): boolean {
+  return blocks.some((b) => b.key === key && b.present);
+}
+
+/** Assembles the three parts the renderer and the composer both work from. */
+export function buildEdition(
+  input: EditionInput,
+  sections: EditionSection[]
+): Edition {
+  const generated = buildGenerated(input);
+  return { generated, sections, blocks: dataBlocks(generated) };
+}
+
+/** True when the edition would render as a header and a sign-off and nothing else. */
+export function isEmptyEdition(edition: Edition): boolean {
+  return (
+    edition.blocks.every((b) => !b.present) &&
+    renderableSections(edition.sections).length === 0
+  );
 }
 
 /**
@@ -792,8 +752,13 @@ export function subjectLine(week: Week): string {
 export function sourceLine(generated: Generated): string {
   const { candidates, outlets } = generated.press;
   const range = weekRangeLabel(generated.week);
+  // A running week's article count is five days against a completed week's
+  // seven. Saying "so far" is the whole of the fix: the number is right, and it
+  // stops being read as a finished total.
+  const soFar = generated.partialWeek ? " so far" : "";
+
   if (candidates === 0) {
-    return `No coded article was published in ${range}.`;
+    return `No coded article was published in ${range}${soFar}.`;
   }
   // "named outlets", not "outlets". Articles captured through a keyword alert
   // carry no publisher in the corpus, so they are counted in the article total
@@ -801,7 +766,10 @@ export function sourceLine(generated: Generated): string {
   // is what makes the smaller number true rather than an undercount.
   return (
     `Drawn from ${candidates} coded article${candidates === 1 ? "" : "s"} published ` +
-    `${range}, from ${outlets} named outlet${outlets === 1 ? "" : "s"}.`
+    `${range}${soFar}, from ${outlets} named outlet${outlets === 1 ? "" : "s"}.` +
+    (generated.partialWeek
+      ? " This edition was put together before the week closed, so it covers part of the week only."
+      : "")
   );
 }
 

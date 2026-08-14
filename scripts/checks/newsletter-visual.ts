@@ -24,9 +24,10 @@
  *                      375 is where a table-based layout actually breaks, and
  *                      checking only the design width is how a column collapses
  *                      in the client and nowhere else
- *   index.html         the composer, every authored field filled, so the two
- *                      columns can be read at full length rather than as the
- *                      empty boxes a fresh edition shows
+ *   index.html         the composer with every section written, one of them
+ *                      marked edited-by-hand, so both card states can be read
+ *                      at full length rather than as the empty boxes a fresh
+ *                      edition shows
  *
  * The press section uses REAL coded articles for the week, because the thing
  * most likely to break the layout is a real headline: they run long, they carry
@@ -43,12 +44,14 @@ import { createAdminClient } from "../../src/lib/supabase/admin";
 import { weekContainingDate } from "../../src/lib/analysis/week-period";
 import { previousWeek, weekRangeLabel } from "../../src/lib/newsletter/week";
 import {
-  buildGenerated,
-  sectionStates,
+  buildEdition,
   subjectLine,
-  type Authored,
   type EditionInput,
 } from "../../src/lib/newsletter/edition";
+import {
+  SECTION_SLOTS,
+  type EditionSection,
+} from "../../src/lib/newsletter/sections";
 import { renderEditionHtml } from "../../src/lib/newsletter/email";
 import type { PressCandidate } from "../../src/lib/newsletter/press";
 import type {
@@ -69,38 +72,40 @@ function dayOfWeek(weekStart: string, offset: number): string {
 }
 
 /**
- * Authored text at realistic length.
+ * Section text at realistic length, in the shape the model returns.
  *
- * Long enough to wrap, and explicitly labelled as harness copy so a screenshot
- * of it can never be mistaken for a real edition's commentary.
+ * Long enough to wrap, multi-line where the real thing is multi-line, and
+ * explicitly labelled as harness copy so a screenshot of it can never be
+ * mistaken for a real edition's commentary. The LLM is deliberately not called
+ * here: this page exists to be looked at, and it should render the same way
+ * twice.
+ *
+ * `regional` is marked as edited by hand, so the composer's "Edited by you"
+ * state — the one Generate newsletter leaves alone — is visible in the harness
+ * rather than only reachable by clicking.
  */
-const AUTHORED: Authored = {
-  headlineRead:
+const BODIES: Record<string, string> = {
+  headline:
     "HARNESS COPY, NOT A REAL EDITION. Congestion eased across North Asia through the week while the Gulf remained the binding constraint on our westbound lanes. The practical effect for us is narrow: transit variance, not capacity, is what moved.\n\nNothing this week changes the standing booking posture. The watch list below is where the risk actually sits.",
-  regionalCommentary:
-    "HARNESS COPY. North Asia carried the largest absolute reduction, though from the highest base, and the improvement is concentrated in the two ports we do not use heavily. SE Asia is flat within noise. Nothing in the regional picture argues for re-routing.",
-  reliabilityNote:
+  regional:
+    "HARNESS COPY, EDITED BY HAND. North Asia carried the largest absolute reduction, though from the highest base, and the improvement is concentrated in the two ports we do not use heavily. SE Asia is flat within noise. Nothing in the regional picture argues for re-routing.",
+  reliability:
     "HARNESS COPY. Reliability improved a little on the headline number, but the average delay on late arrivals did not, which is the figure that actually sets our buffer. This is a monthly figure and will read the same for the next three editions — read it against the month, not against last week.",
-  watchList: [
-    {
-      risk: "Red Sea routing stays committed to the Cape, keeping Asia–Europe transit at the longer profile",
-      lanes: "Asia–North Europe, Asia–Mediterranean",
-      window: "Next two quarters",
-      direction: "Stable — no carrier has signalled a return",
-    },
-    {
-      risk: "Equipment repositioning lags demand into the year-end peak",
-      lanes: "ISC exports, SE Asia exports",
-      window: "6–10 weeks",
-      direction: "Worsening — watch box availability at origin",
-    },
-  ],
-  recommendedActions: [
-    "HARNESS COPY. Hold the current buffer on Asia–North Europe; the delay figure has not moved with the reliability figure.",
-    "Confirm equipment availability with origin offices in ISC before committing to the peak-season volumes.",
-    "No action on SE Asia — the change is inside the noise band and does not justify a re-tender.",
-  ],
+  watch_list:
+    "Red Sea routing stays committed to the Cape, keeping Asia–Europe transit at the longer profile. Asia–North Europe and Asia–Mediterranean, next two quarters.\nEquipment repositioning lags demand into the year-end peak. ISC and SE Asia exports, six to ten weeks.\nQueue/berth at Shanghai/Ningbo stays above 3.0 while the anchorage figure falls, which is a berth-side constraint rather than a demand one.",
+  actions:
+    "1. HARNESS COPY. Hold the current buffer on Asia–North Europe; the delay figure has not moved with the reliability figure.\n2. Confirm equipment availability with origin offices in ISC before committing to the peak-season volumes.\n3. No action on SE Asia — the change is inside the noise band and does not justify a re-tender.",
 };
+
+const GEN_AT = "2026-08-17T08:30:00.000Z";
+
+const SECTIONS: EditionSection[] = SECTION_SLOTS.map((slot) => ({
+  key: slot.key,
+  title: slot.title,
+  body: BODIES[slot.key] ?? "",
+  generated_at: GEN_AT,
+  edited_at: slot.key === "regional" ? "2026-08-17T09:15:00.000Z" : null,
+}));
 
 /**
  * Invented operational figures. Deliberately round, and deliberately not the
@@ -275,14 +280,11 @@ async function main() {
     press,
     includedArticleIds: null,
     hasHistoryBefore: true,
+    partialWeek: false,
   };
 
-  const generated = buildGenerated(input);
-  const edition = {
-    generated,
-    authored: AUTHORED,
-    sections: sectionStates(generated, AUTHORED),
-  };
+  const edition = buildEdition(input, SECTIONS);
+  const generated = edition.generated;
   const html = renderEditionHtml(edition, { baseUrl: "https://nestle-scm.vercel.app" });
 
   console.log(
@@ -291,8 +293,8 @@ async function main() {
       `${generated.ports.length} ports, ${generated.regions.length} regions`
   );
   console.log(
-    `Sections dropped: ${
-      edition.sections.filter((s) => !s.present).map((s) => s.title).join(", ") || "none"
+    `Blocks left out: ${
+      edition.blocks.filter((b) => !b.present).map((b) => b.title).join(", ") || "none"
     }`
   );
 
@@ -331,7 +333,7 @@ async function main() {
   writeFileSync(
     join(outDir, "data.json"),
     JSON.stringify(
-      { week, input, authored: AUTHORED, baseUrl: "https://nestle-scm.vercel.app" },
+      { week, input, sections: SECTIONS, baseUrl: "https://nestle-scm.vercel.app" },
       null,
       2
     )
@@ -342,12 +344,14 @@ async function main() {
     `import { createRoot } from "react-dom/client";
 import { NewsletterComposer } from "@/app/(admin)/newsletter/NewsletterComposer";
 import { ToastProvider } from "@/components/Toast";
-import { recentEditionWeeks } from "@/lib/newsletter/week";
+import { editionWeekChoices } from "@/lib/newsletter/week";
 import data from "./data.json";
 
 const d = data as any;
 
-const weeks = [d.week, ...recentEditionWeeks(new Date("2026-08-17"), 8)].filter(
+// The SAME list the page builds, so the running week and its "in progress"
+// label are visible here rather than only in production.
+const weeks = [d.week, ...editionWeekChoices(new Date("2026-08-17T09:00:00Z"), 8)].filter(
   (w, i, all) => all.findIndex((x) => x.start === w.start) === i
 );
 
@@ -370,7 +374,7 @@ createRoot(document.getElementById("root")!).render(
         exists
         sentAt={null}
         savedAt={"2026-08-17T09:00:00.000Z"}
-        authored={d.authored}
+        sections={d.sections}
         includedArticleIds={null}
         input={d.input}
         truncated={false}
@@ -379,6 +383,7 @@ createRoot(document.getElementById("root")!).render(
         snapshotUnreadable={false}
         baseUrl={d.baseUrl}
         canCurate
+        now={"2026-08-17T09:00:00.000Z"}
       />
     </div>
   </ToastProvider>
@@ -396,7 +401,9 @@ createRoot(document.getElementById("root")!).render(
    */
   writeFileSync(
     join(outDir, "action-stub.ts"),
-    `export async function saveEdition() { return { ok: true as const }; }
+    `export async function generateEdition() { return { ok: true as const, written: [], keptEdited: [], empty: [] }; }
+export async function saveSection() { return { ok: true as const }; }
+export async function saveIncludedArticles() { return { ok: true as const }; }
 export async function sendEdition() { return { ok: true as const }; }
 `
   );

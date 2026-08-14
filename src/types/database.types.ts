@@ -355,50 +355,38 @@ export type Database = {
         Row: {
           entered_at: string
           entered_by: string | null
-          headline_read: string | null
           id: string
           included_article_ids: string[] | null
-          week_of: string
-          recommended_actions: Json | null
-          regional_commentary: string | null
-          reliability_note: string | null
+          sections: Json
           sent_at: string | null
           sent_by: string | null
           snapshot: Json | null
           status: string
-          watch_list: Json | null
+          week_of: string
         }
         Insert: {
           entered_at?: string
           entered_by?: string | null
-          headline_read?: string | null
           id?: string
           included_article_ids?: string[] | null
-          week_of: string
-          recommended_actions?: Json | null
-          regional_commentary?: string | null
-          reliability_note?: string | null
+          sections?: Json
           sent_at?: string | null
           sent_by?: string | null
           snapshot?: Json | null
           status?: string
-          watch_list?: Json | null
+          week_of: string
         }
         Update: {
           entered_at?: string
           entered_by?: string | null
-          headline_read?: string | null
           id?: string
           included_article_ids?: string[] | null
-          week_of?: string
-          recommended_actions?: Json | null
-          regional_commentary?: string | null
-          reliability_note?: string | null
+          sections?: Json
           sent_at?: string | null
           sent_by?: string | null
           snapshot?: Json | null
           status?: string
-          watch_list?: Json | null
+          week_of?: string
         }
         Relationships: [
           {

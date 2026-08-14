@@ -24,18 +24,27 @@
  */
 
 import type { Json } from "@/types/database.types";
-import type { Authored, Edition, Generated, SectionState } from "./edition";
+import type { BlockState, Edition, Generated } from "./edition";
+import type { EditionSection } from "./sections";
 import type { Week } from "./week";
 
-export const SNAPSHOT_VERSION = 1;
+/**
+ * Bumped to 2: the shape changed when the five authored fields became one
+ * `sections` array. A version-1 snapshot cannot be rendered by the current
+ * code, and parseSnapshot refuses it rather than half-reading it — but the
+ * table held no sent editions when this changed, so no such snapshot exists.
+ */
+export const SNAPSHOT_VERSION = 2;
 
 export type EditionSnapshot = {
   version: number;
   week: Week;
   subject: string;
   generated: Generated;
-  authored: Authored;
-  sections: SectionState[];
+  /** The written sections exactly as they were when sent. */
+  sections: EditionSection[];
+  /** Which data blocks the edition carried. */
+  blocks: BlockState[];
   /** The email body exactly as it was exported. */
   html: string;
   sentAt: string;
@@ -59,8 +68,8 @@ export function buildSnapshot(input: {
     week: input.edition.generated.week,
     subject: input.subject,
     generated: input.edition.generated,
-    authored: input.edition.authored,
     sections: input.edition.sections,
+    blocks: input.edition.blocks,
     html: input.html,
     sentAt: input.sentAt,
     sentByName: input.sentByName,
@@ -79,7 +88,11 @@ export function parseSnapshot(value: Json | null): EditionSnapshot | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
 
-  if (typeof raw.version !== "number" || raw.version > SNAPSHOT_VERSION) return null;
+  // An OLDER version is refused too, not only a newer one. Version 1 stored
+  // five authored fields that nothing can render now, and half-reading it would
+  // put a sent edition on screen missing its headline — the silent change the
+  // freeze exists to prevent, wearing a different hat.
+  if (raw.version !== SNAPSHOT_VERSION) return null;
   if (typeof raw.html !== "string" || raw.html.length === 0) return null;
   if (!raw.generated || typeof raw.generated !== "object") return null;
   if (!raw.week || typeof raw.week !== "object") return null;

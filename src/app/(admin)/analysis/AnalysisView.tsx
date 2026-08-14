@@ -4,6 +4,7 @@ import { useState, useTransition, type CSSProperties, type ReactNode } from "rea
 import dynamic from "next/dynamic";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
+import { WeekSelect } from "@/components/WeekSelect";
 import type { Week } from "@/lib/analysis/week-period";
 import type {
   WordCloudWord,
@@ -201,19 +202,15 @@ export function AnalysisView({
           >
             {exporting ? "Building…" : "↓ Export PDF"}
           </button>
-          <select
-            style={selectStyle}
-            aria-label="Week"
+          {/* The same control the Newsletter composer uses. Two screens
+              addressed by week should phrase a week identically — see
+              components/WeekSelect. */}
+          <WeekSelect
+            options={weeks.map((w) => ({ week: w }))}
             value={week.start}
             disabled={pending}
-            onChange={(e) => selectWeek(e.target.value)}
-          >
-            {weeks.map((w) => (
-              <option key={w.start} value={w.start}>
-                {w.label}
-              </option>
-            ))}
-          </select>
+            onChange={selectWeek}
+          />
         </div>
       </div>
 

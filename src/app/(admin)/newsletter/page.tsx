@@ -1,18 +1,18 @@
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/auth";
 import {
-  recentEditionWeeks,
+  editionWeekChoices,
   resolveEditionWeek,
   type Week,
 } from "@/lib/newsletter/week";
-import { EMPTY_AUTHORED, readAuthored } from "@/lib/newsletter/edition";
+import { parseSections } from "@/lib/newsletter/sections";
 import { loadBaseUrl, loadEdition, loadWeekCounts } from "@/lib/newsletter/load";
 import { parseSnapshot } from "@/lib/newsletter/snapshot";
 import { NewsletterComposer, type EditionListItem } from "./NewsletterComposer";
 
 export const dynamic = "force-dynamic";
 
-/** How many weeks the dropdown offers. Roughly a quarter of editions. */
+/** How many completed weeks the dropdown offers, on top of the running one. */
 const WEEK_CHOICES = 12;
 
 type SearchParams = { week?: string };
@@ -21,10 +21,10 @@ type SearchParams = { week?: string };
  * The weekly "Ocean Freight Update — AOA" composer.
  *
  * A sibling of /analysis rather than a tab inside it: same ISO week, different
- * job. /analysis is for reading what happened; this is for composing what gets
+ * job. /analysis is for reading what happened; this is for writing what gets
  * sent, to a different audience, on a Monday.
  *
- * All roles may open it, same tier as Analysis. Everything authored or sendable
+ * All roles may open it, same tier as Analysis. Everything that writes or sends
  * checks canCurate in its own server action, and the database checks it again.
  */
 export default async function NewsletterPage({
@@ -39,10 +39,11 @@ export default async function NewsletterPage({
   const now = new Date();
   const week = resolveEditionWeek(sp.week, now);
 
-  // A deep link can name a week older than the dropdown reaches. Merging it in
-  // keeps the select consistent with what is on screen, rather than rendering a
-  // control whose value matches none of its options.
-  const choices: Week[] = recentEditionWeeks(now, WEEK_CHOICES);
+  // The running week first, then the completed ones. A deep link can name a
+  // week older than the list reaches; merging it in keeps the control
+  // consistent with what is on screen rather than showing a value that matches
+  // none of its options.
+  const choices: Week[] = editionWeekChoices(now, WEEK_CHOICES);
   const weeks = choices.some((w) => w.start === week.start)
     ? choices
     : [...choices, week].sort((a, b) => (a.start < b.start ? 1 : -1));
@@ -50,27 +51,23 @@ export default async function NewsletterPage({
   const [{ data: edition }, { data: allEditions }, weekCounts] = await Promise.all([
     supabase
       .from("newsletter_editions")
-      .select(
-        "week_of, status, headline_read, regional_commentary, reliability_note, watch_list, recommended_actions, included_article_ids, snapshot, sent_at, entered_at"
-      )
+      .select("week_of, status, sections, included_article_ids, snapshot, sent_at, entered_at")
       .eq("week_of", week.start)
       .maybeSingle(),
-    // Drives the status marks in the dropdown, so a curator can tell at a
-    // glance which weeks are already frozen without opening each one.
     supabase
       .from("newsletter_editions")
       .select("week_of, status, sent_at")
       .order("week_of", { ascending: false }),
-    // And the coded-article count per week, so a thin week is visible BEFORE it
-    // is opened. Permanently useful, not a workaround for the corpus being
-    // young — some weeks are genuinely quiet.
+    // The coded-article count per week, so a quiet week is visible BEFORE it is
+    // opened. It is the thing that tells a non-technical user why a thin week
+    // looks thin.
     loadWeekCounts(supabase, weeks),
   ]);
 
   const sent = edition?.status === "sent";
   const snapshot = sent ? parseSnapshot(edition?.snapshot ?? null) : null;
 
-  // A sent edition renders from its snapshot and nothing else — no live read,
+  // A sent edition renders from its saved copy and nothing else — no live read,
   // no recompute. Loading the week's rows anyway would only create the chance
   // of showing them.
   const loaded = sent
@@ -91,11 +88,11 @@ export default async function NewsletterPage({
       weeks={weeks}
       weekCounts={weekCounts}
       editions={editionList}
-      status={edition?.status === "sent" ? "sent" : "draft"}
+      status={sent ? "sent" : "draft"}
       exists={Boolean(edition)}
       sentAt={edition?.sent_at ?? null}
       savedAt={edition?.entered_at ?? null}
-      authored={edition ? readAuthored(edition) : EMPTY_AUTHORED}
+      sections={parseSections(edition?.sections ?? null)}
       includedArticleIds={edition?.included_article_ids ?? null}
       input={loaded?.input ?? null}
       truncated={loaded?.truncated ?? false}
@@ -104,6 +101,9 @@ export default async function NewsletterPage({
       snapshotUnreadable={sent && snapshot === null}
       baseUrl={baseUrl}
       canCurate={ctx.canCurate}
+      // The server's clock, so "in progress" cannot differ between two people
+      // looking at the same week from different machines.
+      now={now.toISOString()}
     />
   );
 }

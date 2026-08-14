@@ -2,18 +2,28 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionContext } from "@/lib/auth";
 import { toActionError, type ActionResult } from "@/lib/actions/result";
 import type { Json } from "@/types/database.types";
 import { parseIsoDate, weekContainingDate } from "@/lib/analysis/week-period";
 import { weekRangeLabel } from "@/lib/newsletter/week";
 import {
-  buildGenerated,
-  readAuthored,
-  sectionStates,
+  buildEdition,
+  isEmptyEdition,
   subjectLine,
-  type WatchListEntry,
 } from "@/lib/newsletter/edition";
+import {
+  applyEdit,
+  mergeGenerated,
+  parseSections,
+  sectionsToJson,
+  slotFor,
+  SECTION_KEYS,
+  type EditionSection,
+  type SectionKey,
+} from "@/lib/newsletter/sections";
+import { generateSections } from "@/lib/newsletter/generate";
 import { loadBaseUrl, loadEdition } from "@/lib/newsletter/load";
 import { renderEditionHtml } from "@/lib/newsletter/email";
 import { buildSnapshot, snapshotToJson } from "@/lib/newsletter/snapshot";
@@ -23,17 +33,23 @@ const PATH = "/newsletter";
 /**
  * Composing and sending an edition.
  *
- * These run under the CALLER'S client, never the service role. There is no
- * secret to reach and nothing to work around: newsletter_editions carries a
- * can_curate() write policy exactly so the database enforces the same rule the
- * button does. An admin client here would bypass that and leave the disabled
- * button as the only gate.
+ * WHICH CLIENT DOES WHAT, and why it is split.
  *
- * Every write is logged to audit_log — 'newsletter.update' and
- * 'newsletter.send'. The row holds only the LATEST authored text, so the audit
- * trail is the history of what the edition said and who said it. That matters
- * more here than for most tables: this text goes to the client under the desk's
- * name.
+ * Every DATABASE write runs under the CALLER'S client, because
+ * newsletter_editions carries a can_curate() write policy precisely so the
+ * database enforces the same rule the button does. An admin client here would
+ * bypass that and leave the disabled button as the only gate.
+ *
+ * The LLM call is the one exception, and it has to be: get_integration_secret()
+ * — the Vault decrypt for the Gemini key — is granted to service_role alone
+ * (migration 0019). So the admin client is constructed for that call and that
+ * call only, AFTER the authorisation check, and the result comes back as plain
+ * text that is then written under the caller's client. Same ordering the
+ * ingestion route and the Analysis regenerate action use.
+ *
+ * Every write is logged to audit_log as 'newsletter.update' or
+ * 'newsletter.send'. The row holds only the current text, so the audit trail is
+ * the history of what the edition said and who — or what — said it.
  */
 
 async function requireCurate() {
@@ -49,7 +65,7 @@ async function requireCurate() {
  *
  * The freeze trigger raises 42501 with a message written for a person to read,
  * and the generic mapper would flatten it to "You don't have permission to do
- * that" — which is true but tells the curator nothing about why. Passed through
+ * that" — true, but it tells the curator nothing about why. Passed through
  * verbatim instead.
  */
 function toEditionError(error: { message?: string } | null): string {
@@ -58,131 +74,287 @@ function toEditionError(error: { message?: string } | null): string {
   return toActionError(error);
 }
 
-function trimmed(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-/** Watch-list rows with nothing in them are not entries; they are blank rows. */
-function cleanWatchList(entries: WatchListEntry[] | undefined): Json {
-  return (entries ?? [])
-    .map((e) => ({
-      risk: trimmed(e.risk),
-      lanes: trimmed(e.lanes),
-      window: trimmed(e.window),
-      direction: trimmed(e.direction),
-    }))
-    .filter((e) => e.risk || e.lanes || e.window || e.direction) as Json;
-}
-
-function cleanActions(actions: string[] | undefined): Json {
-  return (actions ?? []).map(trimmed).filter(Boolean) as Json;
-}
-
-export type EditionDraftInput = {
-  /**
-   * Any date inside the week; snapped to that week's ISO Monday. The composer
-   * always posts a Monday, so a non-Monday value means a hand-built call — and
-   * snapping is unambiguously what was meant, where rejecting would fail for no
-   * reason the caller could act on.
-   */
-  weekStart: string;
-  headlineRead?: string;
-  regionalCommentary?: string;
-  reliabilityNote?: string;
-  watchList?: WatchListEntry[];
-  recommendedActions?: string[];
-  /**
-   * The curator's press selection, or null while nothing has been toggled.
-   * Null and [] are different: null means "not curated, everything is in",
-   * [] means "every candidate was toggled out".
-   */
-  includedArticleIds?: string[] | null;
-};
+type Client = Awaited<ReturnType<typeof createClient>>;
 
 /**
- * Writes the authored half of a draft.
+ * The one shape every action here works on: an existing draft, or a new one.
  *
- * Upserts on week_of, so the first save creates the edition and every later one
- * replaces it. Nothing generated is written — no figure, no press item, no
- * rendered HTML. Those are read fresh on every view, which is what lets a draft
- * follow the operational data as more days are entered.
+ * A sent edition is refused HERE, with the reason, rather than being left to
+ * trip the freeze trigger and surface as a constraint error. The trigger is
+ * still the gate — nothing reaches the database without passing it — this is
+ * just the sentence a person can act on.
  */
-export async function saveEdition(
-  input: EditionDraftInput
-): Promise<ActionResult> {
-  const { ctx, error } = await requireCurate();
-  if (!ctx) return { ok: false, error: error! };
+type OpenDraft =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      week: ReturnType<typeof weekContainingDate>;
+      supabase: Client;
+      sections: EditionSection[];
+      includedArticleIds: string[] | null;
+      /** False for a week that has never been saved. */
+      exists: boolean;
+    };
 
-  const parsed = parseIsoDate(input.weekStart);
+async function openDraft(weekStart: string): Promise<OpenDraft> {
+  const parsed = parseIsoDate(weekStart);
   if (!parsed) return { ok: false, error: "That is not a valid week." };
   const week = weekContainingDate(parsed);
 
   const supabase = await createClient();
-
-  // Read first so a sent edition is refused with the reason rather than with a
-  // constraint error. The trigger is still the gate — this is the message.
-  const { data: existing } = await supabase
+  const { data, error } = await supabase
     .from("newsletter_editions")
-    .select("status, sent_at")
+    .select("status, sections, included_article_ids")
     .eq("week_of", week.start)
     .maybeSingle();
 
-  if (existing?.status === "sent") {
+  if (error) return { ok: false, error: toEditionError(error) };
+  if (data?.status === "sent") {
     return {
       ok: false,
       error: `The edition for ${weekRangeLabel(week)} was sent and is frozen. Issue a new edition rather than editing this one.`,
     };
   }
 
-  const payload = {
-    week_of: week.start,
-    status: "draft",
-    headline_read: trimmed(input.headlineRead) || null,
-    regional_commentary: trimmed(input.regionalCommentary) || null,
-    reliability_note: trimmed(input.reliabilityNote) || null,
-    watch_list: cleanWatchList(input.watchList),
-    recommended_actions: cleanActions(input.recommendedActions),
-    included_article_ids:
-      input.includedArticleIds === undefined ? null : input.includedArticleIds,
-    entered_by: ctx.userId,
-    entered_at: new Date().toISOString(),
+  return {
+    ok: true,
+    week,
+    supabase,
+    sections: parseSections(data?.sections ?? null),
+    includedArticleIds: data?.included_article_ids ?? null,
+    exists: Boolean(data),
   };
+}
 
-  const { error: writeError } = await supabase
-    .from("newsletter_editions")
-    .upsert(payload, { onConflict: "week_of" });
-  if (writeError) return { ok: false, error: toEditionError(writeError) };
+/**
+ * Upserts the draft under the caller's client.
+ *
+ * A field left undefined is not written at all, so saving one section cannot
+ * blank the press selection and vice versa. `included_article_ids` is passed
+ * explicitly as null when the curator has cleared it, which is why the check is
+ * `!== undefined` rather than a truthiness test — null and absent mean
+ * different things here, as they do everywhere else in this feature.
+ */
+async function writeDraft(
+  supabase: Client,
+  weekStart: string,
+  userId: string,
+  fields: {
+    sections?: EditionSection[];
+    includedArticleIds?: string[] | null;
+  }
+) {
+  return supabase.from("newsletter_editions").upsert(
+    {
+      week_of: weekStart,
+      status: "draft",
+      entered_by: userId,
+      entered_at: new Date().toISOString(),
+      ...(fields.sections ? { sections: sectionsToJson(fields.sections) } : {}),
+      ...(fields.includedArticleIds !== undefined
+        ? { included_article_ids: fields.includedArticleIds }
+        : {}),
+    },
+    { onConflict: "week_of" }
+  );
+}
 
+async function audit(supabase: Client, userId: string, metadata: Json) {
   await supabase.from("audit_log").insert({
-    actor_id: ctx.userId,
+    actor_id: userId,
     action: "newsletter.update",
     target_type: "newsletter_edition",
     target_id: null,
-    // The full authored text, because the row keeps only the latest version and
-    // "what did the read for that week say before it was rewritten" has to be
-    // answerable for something that goes out under the desk's name.
-    metadata: {
-      week_of: week.start,
-      headline_read: payload.headline_read,
-      regional_commentary: payload.regional_commentary,
-      reliability_note: payload.reliability_note,
-      watch_list: payload.watch_list,
-      recommended_actions: payload.recommended_actions,
-      included_article_count: payload.included_article_ids?.length ?? null,
-    },
+    metadata,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Generate
+// ---------------------------------------------------------------------------
+
+export type GenerateResult = ActionResult & {
+  /** Section titles the model wrote. */
+  written?: string[];
+  /** Section titles left alone because a person had edited them. */
+  keptEdited?: string[];
+  /** Section titles the model had nothing to say for. */
+  empty?: string[];
+};
+
+/**
+ * Writes every section the week's data can support.
+ *
+ * SECTIONS A PERSON HAS EDITED ARE LEFT ALONE, and the result says which. An
+ * edit silently wiped by a second button press is the fastest way to lose this
+ * team's trust in the tool, and there is no undo to recover it with. Anyone who
+ * wants an edited section rewritten uses Regenerate inside that section, which
+ * is scoped to that section alone.
+ */
+export async function generateEdition(
+  weekStart: string,
+  only: SectionKey | null = null
+): Promise<GenerateResult> {
+  const { ctx, error } = await requireCurate();
+  if (!ctx) return { ok: false, error: error! };
+
+  const draft = await openDraft(weekStart);
+  if (!draft.ok) return { ok: false, error: draft.error };
+
+  if (only && !SECTION_KEYS.includes(only)) {
+    return { ok: false, error: "That is not a section of this newsletter." };
+  }
+
+  try {
+    const { input } = await loadEdition(
+      draft.supabase,
+      draft.week,
+      draft.includedArticleIds
+    );
+    const edition = buildEdition(input, draft.sections);
+
+    // The admin client exists for the Vault-backed key and nothing else. It is
+    // built here, after the permission check, and never used for a write.
+    const written = await generateSections(
+      createAdminClient(),
+      edition.generated,
+      only
+    );
+
+    const merged = mergeGenerated(
+      draft.sections,
+      written.bodies,
+      new Date().toISOString(),
+      only
+    );
+
+    const { error: writeError } = await writeDraft(
+      draft.supabase,
+      draft.week.start,
+      ctx.userId,
+      { sections: merged.sections }
+    );
+    if (writeError) return { ok: false, error: toEditionError(writeError) };
+
+    await audit(draft.supabase, ctx.userId, {
+      week_of: draft.week.start,
+      event: only ? "section_regenerated" : "sections_generated",
+      section: only,
+      written: merged.written,
+      kept_edited: merged.keptEdited,
+      empty: merged.empty,
+      articles_used: written.articlesUsed,
+      // The bodies themselves, because the row keeps only the current text and
+      // "what did the model write before someone rewrote it" has to be
+      // answerable for something going out under the desk's name.
+      bodies: merged.sections.map((s) => ({ key: s.key, body: s.body })),
+    });
+
+    revalidatePath(PATH);
+
+    const titles = (keys: SectionKey[]) =>
+      keys.map((k) => slotFor(k)?.title ?? k);
+
+    return {
+      ok: true,
+      written: titles(merged.written),
+      keptEdited: titles(merged.keptEdited),
+      empty: titles(merged.empty),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error ? err.message : "Could not write the newsletter.",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Edit
+// ---------------------------------------------------------------------------
+
+/**
+ * Saves one section's text.
+ *
+ * Stamps edited_at, which is what protects it from the next Generate. Clearing
+ * the box removes the section entirely — the same result as the model having
+ * nothing to say, because it is the same instruction.
+ */
+export async function saveSection(
+  weekStart: string,
+  key: SectionKey,
+  body: string
+): Promise<ActionResult> {
+  const { ctx, error } = await requireCurate();
+  if (!ctx) return { ok: false, error: error! };
+  if (!SECTION_KEYS.includes(key)) {
+    return { ok: false, error: "That is not a section of this newsletter." };
+  }
+
+  const draft = await openDraft(weekStart);
+  if (!draft.ok) return { ok: false, error: draft.error };
+
+  const next = applyEdit(draft.sections, key, body, new Date().toISOString());
+
+  const { error: writeError } = await writeDraft(
+    draft.supabase,
+    draft.week.start,
+    ctx.userId,
+    { sections: next }
+  );
+  if (writeError) return { ok: false, error: toEditionError(writeError) };
+
+  await audit(draft.supabase, ctx.userId, {
+    week_of: draft.week.start,
+    event: "section_edited",
+    section: key,
+    body: body.trim(),
   });
 
   revalidatePath(PATH);
   return { ok: true };
 }
 
+/** Saves the curator's press selection. Separate because it is not prose. */
+export async function saveIncludedArticles(
+  weekStart: string,
+  includedArticleIds: string[] | null
+): Promise<ActionResult> {
+  const { ctx, error } = await requireCurate();
+  if (!ctx) return { ok: false, error: error! };
+
+  const draft = await openDraft(weekStart);
+  if (!draft.ok) return { ok: false, error: draft.error };
+
+  const { error: writeError } = await writeDraft(
+    draft.supabase,
+    draft.week.start,
+    ctx.userId,
+    { includedArticleIds }
+  );
+  if (writeError) return { ok: false, error: toEditionError(writeError) };
+
+  await audit(draft.supabase, ctx.userId, {
+    week_of: draft.week.start,
+    event: "articles_selected",
+    included_article_count: includedArticleIds?.length ?? null,
+  });
+
+  revalidatePath(PATH);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Send
+// ---------------------------------------------------------------------------
+
 export type SendResult = ActionResult & { subject?: string };
 
 /**
  * Freezes and sends an edition.
  *
- * Saves the draft first so what is frozen is what the curator was looking at,
- * then RE-READS the stored row and recomputes every generated value server-side
+ * RE-READS the stored row and recomputes every generated value server-side
  * before building the snapshot. The client's rendering is never trusted as the
  * record: it is the record of what the client's JavaScript believed, which is
  * not the same thing.
@@ -195,69 +367,42 @@ export type SendResult = ActionResult & { subject?: string };
  * list; delivery is the curator pasting the body into Outlook, exactly as every
  * prior edition travelled.
  */
-export async function sendEdition(
-  input: EditionDraftInput
-): Promise<SendResult> {
+export async function sendEdition(weekStart: string): Promise<SendResult> {
   const { ctx, error } = await requireCurate();
   if (!ctx) return { ok: false, error: error! };
 
-  const parsed = parseIsoDate(input.weekStart);
-  if (!parsed) return { ok: false, error: "That is not a valid week." };
-  const week = weekContainingDate(parsed);
-  const label = weekRangeLabel(week);
+  const draft = await openDraft(weekStart);
+  if (!draft.ok) return { ok: false, error: draft.error };
+  const label = weekRangeLabel(draft.week);
 
-  const saved = await saveEdition(input);
-  if (!saved.ok) return saved;
-
-  const supabase = await createClient();
-
-  const { data: row, error: readError } = await supabase
-    .from("newsletter_editions")
-    .select(
-      "status, headline_read, regional_commentary, reliability_note, watch_list, recommended_actions, included_article_ids"
-    )
-    .eq("week_of", week.start)
-    .maybeSingle();
-
-  if (readError) return { ok: false, error: toEditionError(readError) };
-  if (!row) {
-    return { ok: false, error: "That edition could not be read back to send." };
-  }
-  if (row.status === "sent") {
-    return { ok: false, error: `The edition for ${label} has already been sent.` };
-  }
-
-  const [{ input: editionInput }, baseUrl] = await Promise.all([
-    loadEdition(supabase, week, row.included_article_ids),
-    loadBaseUrl(supabase),
+  const [{ input }, baseUrl] = await Promise.all([
+    loadEdition(draft.supabase, draft.week, draft.includedArticleIds),
+    loadBaseUrl(draft.supabase),
   ]);
 
-  const generated = buildGenerated(editionInput);
-  const authored = readAuthored(row);
-  const sections = sectionStates(generated, authored);
-  const edition = { generated, authored, sections };
+  const edition = buildEdition(input, draft.sections);
 
-  // An edition with no section at all would be a header and a sign-off. That is
-  // not a correction-worthy edge case to render politely around; it is a sign
-  // that nothing has been written or entered yet.
-  if (!sections.some((s) => s.present)) {
+  // An edition with nothing in it would be a header and a sign-off. That is not
+  // an edge case to render politely around; it is a sign that nothing has been
+  // written or entered yet.
+  if (isEmptyEdition(edition)) {
     return {
       ok: false,
       error:
-        "This edition has no content — nothing authored and no figures entered. There is nothing to freeze.",
+        "This edition is empty — no figures entered and nothing written. Press Generate newsletter first.",
     };
   }
 
   const sentAt = new Date().toISOString();
   const snapshot = buildSnapshot({
     edition,
-    subject: subjectLine(week),
+    subject: subjectLine(draft.week),
     html: renderEditionHtml(edition, { baseUrl }),
     sentAt,
     sentByName: ctx.fullName ?? ctx.email,
   });
 
-  const { data: updated, error: sendError } = await supabase
+  const { data: updated, error: sendError } = await draft.supabase
     .from("newsletter_editions")
     .update({
       status: "sent",
@@ -265,7 +410,7 @@ export async function sendEdition(
       sent_at: sentAt,
       sent_by: ctx.userId,
     })
-    .eq("week_of", week.start)
+    .eq("week_of", draft.week.start)
     .eq("status", "draft")
     .select("id");
 
@@ -273,23 +418,26 @@ export async function sendEdition(
   if (!updated || updated.length === 0) {
     return {
       ok: false,
-      error: `The edition for ${label} was sent by someone else while this one was open.`,
+      error: draft.exists
+        ? `The edition for ${label} was sent by someone else while this one was open.`
+        : `Nothing has been saved for ${label} yet. Press Generate newsletter first.`,
     };
   }
 
-  await supabase.from("audit_log").insert({
+  await draft.supabase.from("audit_log").insert({
     actor_id: ctx.userId,
     action: "newsletter.send",
     target_type: "newsletter_edition",
     target_id: updated[0].id,
     metadata: {
-      week_of: week.start,
+      week_of: draft.week.start,
       subject: snapshot.subject,
-      sections_included: sections.filter((s) => s.present).map((s) => s.key),
-      sections_dropped: sections.filter((s) => !s.present).map((s) => s.key),
-      press_shown: generated.press.shown,
-      press_candidates: generated.press.candidates,
-      source_count: generated.sourceCount,
+      partial_week: edition.generated.partialWeek,
+      sections_sent: edition.sections.map((s) => s.key),
+      blocks_included: edition.blocks.filter((b) => b.present).map((b) => b.key),
+      blocks_dropped: edition.blocks.filter((b) => !b.present).map((b) => b.key),
+      press_shown: edition.generated.press.shown,
+      press_candidates: edition.generated.press.candidates,
     },
   });
 

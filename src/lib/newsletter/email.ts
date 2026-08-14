@@ -50,6 +50,7 @@
 
 import {
   asAtLabel,
+  blockPresent,
   deltaBasis,
   formatDelta,
   formatValue,
@@ -59,8 +60,13 @@ import {
   type FleetBar,
   type PortWatchRow,
   type RegionBar,
-  type SectionKey,
 } from "./edition";
+import {
+  findSection,
+  hasBody,
+  renderableSections,
+  type EditionSection,
+} from "./sections";
 import { dayLabel, weekRangeLabel } from "./week";
 import { PRESS_ITEMS_PER_THEME } from "./press";
 
@@ -278,9 +284,13 @@ function regionSection(edition: Edition): string {
     (home.length ? home.map(row).join("") : "") +
     (rest.length ? divider("Rest of world") + rest.map(row).join("") : "");
 
-  const commentary = edition.authored.regionalCommentary
+  // The commentary sits INSIDE the chart's card, not under its own heading:
+  // prose about a chart that has been moved away from the chart gets read as a
+  // separate claim about the week.
+  const regional = findSection(edition.sections, "regional");
+  const commentary = hasBody(regional)
     ? `<div style="border-top:1px solid ${C.rule};margin-top:14px;padding-top:12px;">${paragraphs(
-        edition.authored.regionalCommentary,
+        regional!.body,
         13.5
       )}</div>`
     : "";
@@ -466,9 +476,10 @@ function reliabilitySection(edition: Edition): string {
         .join("")}</table>`
     : "";
 
-  const note = edition.authored.reliabilityNote
+  const written = findSection(edition.sections, "reliability");
+  const note = hasBody(written)
     ? `<div style="border-top:1px solid ${C.rule};margin-top:14px;padding-top:12px;">${paragraphs(
-        edition.authored.reliabilityNote,
+        written!.body,
         13.5
       )}</div>`
     : "";
@@ -549,7 +560,11 @@ function pressSection(edition: Edition): string {
       "What moved in the press",
       `${press.shown} of ${press.candidates} coded article${
         press.candidates === 1 ? "" : "s"
-      } published ${weekRangeLabel(edition.generated.week)}, Monday to Sunday inclusive. Themes run busiest first; stories run newest first within a theme, at most ${PRESS_ITEMS_PER_THEME} each. An article carrying several themes appears once, under its busiest one.`
+      } published ${weekRangeLabel(edition.generated.week)}${
+        edition.generated.partialWeek
+          ? " so far — the week has not closed yet"
+          : ", Monday to Sunday inclusive"
+      }. Themes run busiest first; stories run newest first within a theme, at most ${PRESS_ITEMS_PER_THEME} each. An article carrying several themes appears once, under its busiest one.`
     ) +
     card(
       // A theme whose every candidate was toggled out or suppressed is carried
@@ -563,65 +578,18 @@ function pressSection(edition: Edition): string {
   );
 }
 
-function watchListSection(edition: Edition): string {
-  const field = (label: string, value: string) =>
-    value
-      ? `<tr>
-          <td width="86" style="padding:2px 8px 2px 0;font-family:${MONO};font-size:9.5px;letter-spacing:0.8px;text-transform:uppercase;color:${C.dim};vertical-align:top;">${esc(
-            label
-          )}</td>
-          <td style="padding:2px 0;font-family:${SANS};font-size:12.5px;color:${C.ink};line-height:1.45;">${esc(
-            value
-          )}</td>
-        </tr>`
-      : "";
-
-  const entries = edition.authored.watchList
-    .map(
-      (w) => `
-    <tr><td style="padding:0 0 10px;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:${C.indigoSoft};border-radius:8px;"><tr><td style="padding:12px 14px;">
-        <div style="font-family:${SANS};font-size:13.5px;font-weight:700;color:${C.ink};margin-bottom:7px;line-height:1.4;">${esc(
-          w.risk || "Unnamed risk"
-        )}</div>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;">
-          ${field("Lanes", w.lanes)}
-          ${field("Window", w.window)}
-          ${field("Direction", w.direction)}
-        </table>
-      </td></tr></table>
-    </td></tr>`
-    )
-    .join("");
-
-  return (
-    heading("Watch list", "What the desk is watching, and over what horizon.") +
-    card(
-      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;">${entries}</table>`,
-      "16px 18px 6px"
-    )
-  );
-}
-
-function actionsSection(edition: Edition): string {
-  const items = edition.authored.recommendedActions
-    .map(
-      (action, i) => `
-    <tr>
-      <td width="28" style="padding:6px 10px 6px 0;font-family:${MONO};font-size:13px;font-weight:700;color:${C.indigo};vertical-align:top;">${i + 1}.</td>
-      <td style="padding:6px 0;font-family:${SANS};font-size:13.5px;line-height:1.55;color:${C.ink};">${esc(
-        action
-      )}</td>
-    </tr>`
-    )
-    .join("");
-
-  return (
-    heading("Recommended actions", "In priority order.") +
-    card(
-      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;">${items}</table>`
-    )
-  );
+/**
+ * A written section with its own heading.
+ *
+ * ONE function for every prose section, because there is now one section shape.
+ * The watch list used to be a structured card of risk/lanes/window/direction
+ * and the actions a numbered list, each with its own renderer; both are prose
+ * now, and the model writes one item per line. Lines survive as lines — see
+ * paragraphs() — so a numbered list the model wrote still reads as one without
+ * the curator having to learn any syntax to produce it.
+ */
+function proseSection(section: EditionSection): string {
+  return heading(section.title) + card(paragraphs(section.body, 13.5));
 }
 
 // ---------------------------------------------------------------------------
@@ -641,23 +609,39 @@ export function renderEditionHtml(
   edition: Edition,
   options: RenderOptions = {}
 ): string {
-  const present = new Set<SectionKey>(
-    edition.sections.filter((s) => s.present).map((s) => s.key)
-  );
+  /**
+   * The running order.
+   *
+   * A block appears only if it has something behind it — a data block with
+   * figures, a written section with a body. Nothing is rendered as an empty
+   * heading, a zero-filled chart or a "no data available" line; the edition is
+   * simply shorter. The composer tells the curator what was left out and why,
+   * and that line never travels with the email.
+   *
+   * `regional` and `reliability` are absent from this list because their prose
+   * renders INSIDE their charts rather than as blocks of their own.
+   */
+  const written = (key: Parameters<typeof findSection>[1]) => {
+    const section = findSection(edition.sections, key);
+    return hasBody(section) ? proseSection(section!) : "";
+  };
 
   const body = [
-    present.has("headline")
-      ? heading("Headline read") +
-        card(paragraphs(edition.authored.headlineRead, 14.5))
-      : "",
-    present.has("glance") ? glanceSection(edition) : "",
-    present.has("regional") ? regionSection(edition) : "",
-    present.has("ports") ? portSection(edition) : "",
-    present.has("fleet") ? fleetSection(edition) : "",
-    present.has("reliability") ? reliabilitySection(edition) : "",
-    present.has("press") ? pressSection(edition) : "",
-    present.has("watchList") ? watchListSection(edition) : "",
-    present.has("actions") ? actionsSection(edition) : "",
+    written("headline"),
+    blockPresent(edition.blocks, "glance") ? glanceSection(edition) : "",
+    blockPresent(edition.blocks, "regional") ? regionSection(edition) : "",
+    blockPresent(edition.blocks, "ports") ? portSection(edition) : "",
+    blockPresent(edition.blocks, "fleet") ? fleetSection(edition) : "",
+    blockPresent(edition.blocks, "reliability") ? reliabilitySection(edition) : "",
+    blockPresent(edition.blocks, "press") ? pressSection(edition) : "",
+    written("watch_list"),
+    written("actions"),
+    // Any section stored under a key this layout does not place goes last,
+    // rather than vanishing — see renderableSections().
+    renderableSections(edition.sections)
+      .filter((s) => !["headline", "regional", "reliability", "watch_list", "actions"].includes(s.key))
+      .map(proseSection)
+      .join(""),
   ].join("");
 
   const explore = options.baseUrl
@@ -690,6 +674,16 @@ export function renderEditionHtml(
             weekRangeLabel(edition.generated.week)
           )}</div>
           <div style="font-family:${SANS};font-size:12px;color:${C.dim};margin-top:5px;line-height:1.5;">Ocean Hub Desk &middot; Monday to Sunday &middot; weekly market and coverage read</div>
+          ${
+            // Said in the email, not only in the composer. If someone sends
+            // before the week closes, the person reading it is the one who most
+            // needs to know the counts are partial.
+            edition.generated.partialWeek
+              ? `<div style="font-family:${SANS};font-size:11.5px;color:${C.amber};margin-top:8px;line-height:1.5;">Sent before the week closed &mdash; this edition covers ${esc(
+                  weekRangeLabel(edition.generated.week)
+                )} up to the day it was prepared, not the full week.</div>`
+              : ""
+          }
         </td></tr>
 
         ${body}

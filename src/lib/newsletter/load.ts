@@ -29,7 +29,7 @@ import {
   type PortCongestionRow,
   type ScheduleReliabilityRow,
 } from "@/lib/analysis/operational";
-import { previousWeek, type Week } from "./week";
+import { isRunningWeek, previousWeek, type Week } from "./week";
 import type { PressCandidate } from "./press";
 import type { EditionInput } from "./edition";
 
@@ -169,6 +169,10 @@ export async function loadEdition(
       press: (press.data ?? []) as PressCandidate[],
       includedArticleIds,
       hasHistoryBefore,
+      // Read here rather than inside buildGenerated(), which must stay pure:
+      // at send time this becomes part of the frozen record of whether the week
+      // had closed when the edition went out.
+      partialWeek: isRunningWeek(week),
     },
     truncated: (press.data?.length ?? 0) >= MAX_WEEK_ROWS,
     loadError,

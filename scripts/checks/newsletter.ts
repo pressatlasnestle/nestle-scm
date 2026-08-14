@@ -57,18 +57,28 @@ import {
   weekRangeShort,
 } from "../../src/lib/newsletter/week";
 import {
+  buildEdition,
   buildGenerated,
   deltaBetween,
   deltaBasis,
   formatDelta,
-  readAuthored,
-  sectionStates,
+  isEmptyEdition,
   subjectLine,
-  SECTION_TITLES,
-  type Authored,
+  BLOCK_TITLES,
   type Edition,
   type EditionInput,
 } from "../../src/lib/newsletter/edition";
+import {
+  applyEdit,
+  findSection,
+  mergeGenerated,
+  parseSections,
+  renderableSections,
+  sectionsToJson,
+  SECTION_SLOTS,
+  type EditionSection,
+} from "../../src/lib/newsletter/sections";
+import { requestableSlots } from "../../src/lib/newsletter/generate";
 import { loadEdition, loadWeekCounts } from "../../src/lib/newsletter/load";
 import { renderEditionHtml } from "../../src/lib/newsletter/email";
 import {
@@ -202,6 +212,7 @@ const A_INPUT: EditionInput = {
   week: WEEK_A,
   congestion: A_CONGESTION,
   hasHistoryBefore: false,
+  partialWeek: false,
 };
 
 const B_INPUT: EditionInput = {
@@ -214,6 +225,7 @@ const B_INPUT: EditionInput = {
   reliability: RELIABILITY,
   priorReliability: PRIOR_RELIABILITY,
   hasHistoryBefore: true,
+  partialWeek: false,
 };
 
 /** Week D, with an empty week C between it and B. */
@@ -222,21 +234,35 @@ const D_INPUT: EditionInput = {
   week: WEEK_D,
   congestion: [congestion(D_DAY, 2000, {})],
   hasHistoryBefore: true,
+  partialWeek: false,
 };
 
-const AUTHORED: Authored = {
-  headlineRead: "Test read for a year-2099 week. Not a real edition.",
-  regionalCommentary: "Test regional commentary.",
-  reliabilityNote: "Test reliability note.",
-  watchList: [
-    { risk: "Test risk", lanes: "Test lane", window: "Q1", direction: "Widening" },
-  ],
-  recommendedActions: ["Test action one", "Test action two"],
-};
+const GEN_AT = "2099-01-19T09:00:00.000Z";
 
-function editionFrom(input: EditionInput, authored = AUTHORED): Edition {
-  const generated = buildGenerated(input);
-  return { generated, authored, sections: sectionStates(generated, authored) };
+/** Every section written by the model, none edited. The ordinary state. */
+const SECTIONS: EditionSection[] = SECTION_SLOTS.map((slot) => ({
+  key: slot.key,
+  title: slot.title,
+  body: `Test ${slot.title.toLowerCase()} for a year-2099 week. Not a real edition.`,
+  generated_at: GEN_AT,
+  edited_at: null,
+}));
+
+function editionFrom(input: EditionInput, sections = SECTIONS): Edition {
+  return buildEdition(input, sections);
+}
+
+/** One-section fixtures for the role tier, where the text is only a marker. */
+const oneSection = (body: string): EditionSection[] => [
+  { key: "headline", title: "Headline read", body, generated_at: GEN_AT, edited_at: null },
+];
+const SEED_SECTION = oneSection("seed");
+const TAMPERED_SECTION = oneSection("tampered");
+const BEFORE_SEND_SECTION = oneSection("before send");
+
+/** The headline body out of a raw `sections` column, for asserting on a row. */
+function bodyOf(value: unknown): string {
+  return findSection(parseSections(value as never), "headline")?.body ?? "";
 }
 
 /**
@@ -480,19 +506,33 @@ function logicChecks() {
   );
 
   console.log("\nABSENT IS NOT ZERO");
-  const bare = editionFrom({ ...EMPTY_INPUT, week: WEEK_A, hasHistoryBefore: false }, AUTHORED);
+  const bare = editionFrom(
+    { ...EMPTY_INPUT, week: WEEK_A, hasHistoryBefore: false, partialWeek: false },
+    SECTIONS
+  );
   check(bare.generated.glance.length === 0, "a week with no figures produces no glance rows");
   check(
-    bare.sections.filter((s) => s.present).map((s) => s.key).join(",") ===
-      "headline,watchList,actions",
-    `only the authored sections survive an empty week (${bare.sections
-      .filter((s) => s.present)
-      .map((s) => s.key)
-      .join(",")})`
+    bare.blocks.every((b) => !b.present),
+    `every DATA block is dropped when there are no figures and no articles (${bare.blocks
+      .filter((b) => b.present)
+      .map((b) => b.key)
+      .join(",") || "none present"})`
   );
   check(
-    bare.sections.every((s) => s.present || (s.reason?.length ?? 0) > 0),
-    "and every dropped section says why, for the draft view"
+    bare.blocks.every((b) => b.present || (b.reason?.length ?? 0) > 0),
+    "and every dropped block says why, in plain words, for the composer"
+  );
+  check(
+    bare.blocks.every((b) => !/undefined|null|\berror\b/i.test(b.reason ?? "")),
+    "those reasons read as English, not as a debug string"
+  );
+  check(
+    renderableSections(bare.sections).length === SECTION_SLOTS.length,
+    "the written sections still render — they are text, not figures, and do not depend on the data being there"
+  );
+  check(
+    !isEmptyEdition(bare) && isEmptyEdition({ ...bare, sections: [] }),
+    "an edition is only empty when it has neither figures nor words"
   );
 
   console.log("\nSECTIONS PRESENT AND ABSENT IN THE RENDERED EMAIL");
@@ -501,13 +541,13 @@ function logicChecks() {
 
   for (const key of ["ports", "fleet", "reliability"] as const) {
     check(
-      !hasSectionHeading(aHtml, SECTION_TITLES[key]),
-      `week A entered no ${SECTION_TITLES[key].toLowerCase()} data, so the "${SECTION_TITLES[key]}" section is absent from the HTML entirely`
+      !hasSectionHeading(aHtml, BLOCK_TITLES[key]),
+      `week A entered no ${BLOCK_TITLES[key].toLowerCase()} data, so the "${BLOCK_TITLES[key]}" section is absent from the HTML entirely`
     );
   }
   check(
-    hasSectionHeading(aHtml, SECTION_TITLES.glance) &&
-      hasSectionHeading(aHtml, SECTION_TITLES.regional),
+    hasSectionHeading(aHtml, BLOCK_TITLES.glance) &&
+      hasSectionHeading(aHtml, BLOCK_TITLES.regional),
     "the sections week A DOES have are present, so the absences above are not a blank render"
   );
   check(aHtml.includes("as at 11 Jan"), "the partial week carries its reading date into the email");
@@ -522,8 +562,8 @@ function logicChecks() {
   );
   for (const key of ["ports", "fleet", "reliability"] as const) {
     check(
-      hasSectionHeading(bHtml, SECTION_TITLES[key]),
-      `week B entered ${SECTION_TITLES[key].toLowerCase()} data, so its heading IS present`
+      hasSectionHeading(bHtml, BLOCK_TITLES[key]),
+      `week B entered ${BLOCK_TITLES[key].toLowerCase()} data, so its heading IS present`
     );
   }
   check(
@@ -620,10 +660,10 @@ function logicChecks() {
   check(
     !hasSectionHeading(
       renderEditionHtml(
-        editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, press: FIXTURES, includedArticleIds: [] }),
+        editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, partialWeek: false, press: FIXTURES, includedArticleIds: [] }),
         { baseUrl: null }
       ),
-      SECTION_TITLES.press
+      BLOCK_TITLES.press
     ),
     "and the press section is absent from the email entirely"
   );
@@ -681,7 +721,7 @@ function logicChecks() {
   );
   check(
     !renderEditionHtml(
-      editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, press: [{ ...FIXTURES[0], media: ALERT }] }),
+      editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, partialWeek: false, press: [{ ...FIXTURES[0], media: ALERT }] }),
       { baseUrl: null }
     ).includes("Google Alert"),
     "and no alert query reaches the rendered email"
@@ -708,15 +748,147 @@ function logicChecks() {
     "an unrecognised snapshot is refused rather than silently recomputed"
   );
   check(parseSnapshot(null) === null, "and so is a missing one");
+
+  // =========================================================================
+  // SECTIONS — the shape everything now hangs off
+  // =========================================================================
+  console.log("\nSECTIONS ROUND-TRIP");
+  const roundTripped = parseSections(sectionsToJson(SECTIONS));
   check(
-    readAuthored({
-      headline_read: null,
-      regional_commentary: null,
-      reliability_note: null,
-      watch_list: [{ risk: "", lanes: "", window: "", direction: "" }],
-      recommended_actions: ["", "  ", "real"],
-    }).recommendedActions.join("|") === "real",
-    "blank authored rows are dropped rather than sent as empty cards"
+    roundTripped.map((s) => s.key).join(",") === SECTIONS.map((s) => s.key).join(","),
+    `sections survive a round trip through jsonb IN ORDER (${roundTripped.map((s) => s.key).join(",")})`
+  );
+  check(
+    roundTripped.every(
+      (s, i) =>
+        s.body === SECTIONS[i].body &&
+        s.title === SECTIONS[i].title &&
+        s.generated_at === SECTIONS[i].generated_at &&
+        s.edited_at === SECTIONS[i].edited_at
+    ),
+    "with every field intact, including who wrote it and when"
+  );
+  check(
+    parseSections([{ key: "not_a_section", title: "x", body: "y" }] as never).length === 0,
+    "an unrecognised key is dropped rather than kept as a section that renders nowhere"
+  );
+  check(
+    parseSections(null).length === 0 && parseSections("nonsense" as never).length === 0,
+    "and a malformed column reads as no sections rather than throwing"
+  );
+
+  console.log("\nGENERATE DOES NOT DESTROY EDITS");
+  const edited = applyEdit(SECTIONS, "headline", "A human wrote this.", "2099-01-20T10:00:00.000Z");
+  const editedHeadline = findSection(edited, "headline")!;
+  check(
+    editedHeadline.body === "A human wrote this." && editedHeadline.edited_at !== null,
+    "saving an edit stamps edited_at, which is what protects it"
+  );
+  check(
+    editedHeadline.generated_at === GEN_AT,
+    "and keeps the record that the model wrote the previous version"
+  );
+
+  const regenerated = mergeGenerated(
+    edited,
+    { headline: "The model rewrote this.", watch_list: "New watch list." },
+    "2099-01-21T09:00:00.000Z"
+  );
+  check(
+    findSection(regenerated.sections, "headline")!.body === "A human wrote this.",
+    "Generate newsletter LEAVES AN EDITED SECTION ALONE"
+  );
+  check(
+    regenerated.keptEdited.join(",") === "headline",
+    `and reports which it skipped, so the curator is not left thinking nothing happened (${regenerated.keptEdited.join(",")})`
+  );
+  check(
+    findSection(regenerated.sections, "watch_list")!.body === "New watch list.",
+    "while an unedited section IS filled"
+  );
+  check(
+    regenerated.written.join(",") === "watch_list",
+    `and is reported as written (${regenerated.written.join(",")})`
+  );
+  check(
+    findSection(regenerated.sections, "regional")!.body === SECTIONS[1].body,
+    "a section the model was not asked for is untouched"
+  );
+
+  console.log("\nREGENERATE TOUCHES ONLY ITS OWN SECTION");
+  const forced = mergeGenerated(
+    edited,
+    { headline: "Rewritten on request." },
+    "2099-01-21T09:00:00.000Z",
+    "headline"
+  );
+  check(
+    findSection(forced.sections, "headline")!.body === "Rewritten on request.",
+    "asking for one section by name overrides the edit protection for that section"
+  );
+  check(
+    findSection(forced.sections, "headline")!.edited_at === null,
+    "and clears the edited mark, because a rewrite is giving up the edit"
+  );
+  check(
+    findSection(forced.sections, "watch_list")!.body === SECTIONS[3].body &&
+      findSection(forced.sections, "actions")!.body === SECTIONS[4].body,
+    "and every other section is byte-identical"
+  );
+
+  console.log("\nEMPTY MEANS DROPPED, NOT BLANK");
+  const emptied = mergeGenerated(SECTIONS, { watch_list: "   " }, GEN_AT);
+  check(
+    findSection(emptied.sections, "watch_list") === null,
+    "a section the model returns empty is removed, not stored as a blank heading"
+  );
+  check(
+    emptied.empty.join(",") === "watch_list",
+    "and is reported as having had nothing to say"
+  );
+  check(
+    applyEdit(SECTIONS, "actions", "", "2099-01-20T10:00:00.000Z").every(
+      (s) => s.key !== "actions"
+    ),
+    "clearing the box by hand removes the section too — same instruction, same result"
+  );
+
+  console.log("\nA SAVED EDIT IS WHAT THE EMAIL RENDERS");
+  const editedEdition = editionFrom(B_INPUT, edited);
+  const editedHtml = renderEditionHtml(editedEdition, { baseUrl: null });
+  check(
+    editedHtml.includes("A human wrote this."),
+    "the edited text is in the rendered email"
+  );
+  check(
+    !editedHtml.includes(SECTIONS[0].body),
+    "and the text it replaced is not"
+  );
+
+  console.log("\nTHE MODEL IS ONLY ASKED FOR WHAT THE DATA SUPPORTS");
+  const rich = editionFrom({ ...B_INPUT, press: FIXTURES });
+  const richKeys = requestableSlots(rich.generated).map((s) => s.key);
+  check(
+    richKeys.length === SECTION_SLOTS.length,
+    `a week with figures AND articles supports every section (${richKeys.join(",")})`
+  );
+  // Week A has congestion but no reliability and no articles.
+  const thinKeys = requestableSlots(a.generated).map((s) => s.key);
+  check(
+    !thinKeys.includes("reliability"),
+    "a week with no reliability figures is never asked for a reliability note"
+  );
+  check(
+    !thinKeys.includes("watch_list") && !thinKeys.includes("actions"),
+    "and a week with no articles is never asked for a watch list or actions"
+  );
+  check(
+    thinKeys.includes("headline") && thinKeys.includes("regional"),
+    `while the sections its data DOES support are still asked for (${thinKeys.join(",")})`
+  );
+  check(
+    requestableSlots(bare.generated).length === 0,
+    "a week with nothing at all is asked for nothing, rather than being invited to invent an edition"
   );
 }
 
@@ -849,7 +1021,7 @@ async function databaseChecks() {
     check(readInsert.error !== null, "read role is refused an insert");
 
     const curateInsert = await curate.supabase.from("newsletter_editions").upsert(
-      { week_of: WEEK_A.start, status: "draft", headline_read: "seed", ...stamp() },
+      { week_of: WEEK_A.start, status: "draft", sections: sectionsToJson(SEED_SECTION), ...stamp() },
       { onConflict: "week_of" }
     );
     check(
@@ -859,15 +1031,15 @@ async function databaseChecks() {
 
     await reader.supabase
       .from("newsletter_editions")
-      .update({ headline_read: "tampered" })
+      .update({ sections: sectionsToJson(TAMPERED_SECTION) })
       .eq("week_of", WEEK_A.start);
     const { data: afterReadUpdate } = await reader.supabase
       .from("newsletter_editions")
-      .select("headline_read")
+      .select("sections")
       .eq("week_of", WEEK_A.start)
       .maybeSingle();
     check(
-      afterReadUpdate?.headline_read === "seed",
+      bodyOf(afterReadUpdate?.sections) === "seed",
       "read role cannot rewrite a draft's authored text"
     );
     check(
@@ -972,7 +1144,7 @@ async function databaseChecks() {
     });
 
     await curate.supabase.from("newsletter_editions").upsert(
-      { week_of: SENT_WEEK.start, status: "draft", headline_read: "before send", ...stamp() },
+      { week_of: SENT_WEEK.start, status: "draft", sections: sectionsToJson(BEFORE_SEND_SECTION), ...stamp() },
       { onConflict: "week_of" }
     );
     const flip = await curate.supabase
@@ -993,7 +1165,7 @@ async function databaseChecks() {
 
     const tamper = await curate.supabase
       .from("newsletter_editions")
-      .update({ headline_read: "rewritten after sending" })
+      .update({ sections: sectionsToJson(TAMPERED_SECTION) })
       .eq("week_of", SENT_WEEK.start);
     check(
       tamper.error !== null,
@@ -1020,7 +1192,7 @@ async function databaseChecks() {
     await curate.supabase.from("newsletter_editions").delete().eq("week_of", SENT_WEEK.start);
     const { data: frozenRow } = await reader.supabase
       .from("newsletter_editions")
-      .select("headline_read, snapshot, status")
+      .select("sections, snapshot, status")
       .eq("week_of", SENT_WEEK.start)
       .maybeSingle();
     check(
@@ -1028,7 +1200,7 @@ async function databaseChecks() {
       "a sent edition cannot be deleted and re-created either, which would rebuild the same false record"
     );
     check(
-      frozenRow?.headline_read === "before send",
+      bodyOf(frozenRow?.sections) === "before send",
       "and the authored text survived the refused rewrite intact"
     );
     check(

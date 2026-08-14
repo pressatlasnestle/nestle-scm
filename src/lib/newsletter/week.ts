@@ -73,6 +73,21 @@ export function lastCompletedWeek(now: Date = new Date()): Week {
 }
 
 /**
+ * Whether `week` is the one currently running.
+ *
+ * The running week is offered in the selector on purpose — it is often the week
+ * someone actually wants, and while the corpus is young it is the only one with
+ * much in it. But anything COUNTED across a running week (article volume, items
+ * per theme) is five days measured against a completed week's seven, so
+ * everywhere a count is shown it has to say "so far". Operational figures are
+ * unaffected: they are the most recently entered day, a level rather than a
+ * total, and a level is complete whenever it was read.
+ */
+export function isRunningWeek(week: Week, now: Date = new Date()): boolean {
+  return weekContaining(now).start === week.start;
+}
+
+/**
  * Resolves the `week` URL parameter to a concrete edition week.
  *
  * A parameter naming any day is snapped to that day's week rather than
@@ -102,6 +117,23 @@ export function resolveEditionWeek(
 export function recentEditionWeeks(now: Date = new Date(), count = 12): Week[] {
   const latest = lastCompletedWeek(now);
   return Array.from({ length: count }, (_, i) => shiftWeek(latest, i));
+}
+
+/**
+ * What the selector offers: the RUNNING week, then the completed ones.
+ *
+ * The running week is listed because it is frequently the one wanted — as of
+ * writing, the completed week before it holds 10 coded articles against 96 in
+ * the running one. It is labelled "in progress" and its count "so far" so that
+ * choosing it is a deliberate act rather than a surprise.
+ *
+ * It is NOT the default. The product is a Monday digest for the week that just
+ * closed, and a default that means something different depending on which day
+ * you open the page is exactly the kind of surprise this team should not have
+ * to reason about.
+ */
+export function editionWeekChoices(now: Date = new Date(), count = 12): Week[] {
+  return [weekContaining(now), ...recentEditionWeeks(now, count)];
 }
 
 // ---------------------------------------------------------------------------
