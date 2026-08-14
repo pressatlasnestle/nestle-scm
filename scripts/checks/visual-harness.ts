@@ -38,6 +38,11 @@ import {
   type WeekArticle,
 } from "../../src/lib/analysis/week-stats";
 import { parseStoredNarrative } from "../../src/lib/analysis/narrative";
+import { parseCsv as parseCsvText } from "../../src/lib/analysis/csv";
+import {
+  buildTemplateCsv,
+  type ExistingData,
+} from "../../src/lib/analysis/operational-template";
 
 const SELECT =
   "id, headline, url, media, published_at, status, coded_status, ai_sorting_flagged, ai_sentiment, ai_themes, ai_summary, matched_keywords, keyword_mention_count";
@@ -156,7 +161,68 @@ async function main() {
     },
   };
 
-  writeFileSync(join(outDir, "data.json"), JSON.stringify(payload, null, 2));
+  /**
+   * Two sample uploads for the upload panel, built from the REAL template
+   * generator against the sample data above.
+   *
+   * The panel's whole job is to report what a file will do before it does it,
+   * so it cannot be looked at without a file. One of these carries all three
+   * outcomes at once — values ready, cells left blank, rows not recognised —
+   * and the other is clean, so the from → to preview can be read.
+   */
+  const existing: ExistingData = {
+    congestion: payload.sampleCongestion as never,
+    fleet: payload.sampleFleet as never,
+    ports: payload.samplePorts as never,
+  };
+  const samplePortNames = payload.samplePorts.map((p) => p.port_name);
+  const prefilled = buildTemplateCsv(payload.weekDays, samplePortNames, existing);
+
+  /** Rewrites the Value column, and optionally the Item, row by row. */
+  const rewrite = (
+    csv: string,
+    edit: (cells: string[]) => string[] | null
+  ): string =>
+    parseCsvText(csv)
+      .map((cells, i) => (i === 0 ? cells : (edit(cells) ?? cells)))
+      .map((r) =>
+        r.map((c) => (/[",\r\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(",")
+      )
+      .join("\r\n") + "\r\n";
+
+  const tue = payload.weekDays[1]; // a day with nothing stored
+  const fri = payload.weekDays[4]; // the day the sample ports live on
+
+  const clean = rewrite(prefilled, (c) => {
+    // An overwrite, so the preview has a from → to to show.
+    if (c[0] === payload.weekDays[0] && c[1] === "Port congestion total" && c[3] === "TEU at anchorage")
+      return [...c.slice(0, 4), "1650000"];
+    if (c[0] === fri && c[1] === "Port congestion" && c[3] === "Ships at anchorage")
+      return [...c.slice(0, 4), String(Number(c[4] || 0) + 5)];
+    // New figures on a day that has none.
+    if (c[0] === tue && c[1] === "Port congestion by region")
+      return [...c.slice(0, 4), "250000"];
+    return null;
+  });
+
+  const messy = rewrite(clean, (c) => {
+    // A port typed by hand instead of left as the template wrote it.
+    if (c[1] === "Port congestion" && c[2] === "LA/LB")
+      return [c[0], c[1], "LA / Long Beach", c[3], c[4] || "12"];
+    // A cell someone typed words into.
+    if (c[0] === fri && c[1] === "Fleet status" && c[3] === "Ships") return [...c.slice(0, 4), "n/a"];
+    return null;
+  });
+
+  const withPayload = {
+    ...payload,
+    samplePortNames,
+    // As it would arrive from Excel on Windows.
+    sampleUploadClean: `﻿${clean}`,
+    sampleUploadMessy: `﻿${messy}`,
+  };
+
+  writeFileSync(join(outDir, "data.json"), JSON.stringify(withPayload, null, 2));
   console.log(
     `Week ${week.isoLabel}: ${coded.length} coded, ${payload.themes.length} themes, ` +
       `${words.length} keywords (${payload.wordsShown.length} drawn)`
@@ -178,6 +244,7 @@ import {
   ReliabilityCard,
 } from "@/app/(admin)/analysis/OperationalCards";
 import { OperationalGrid } from "@/app/(admin)/analysis/OperationalGrid";
+import { OperationalUpload } from "@/app/(admin)/analysis/OperationalUpload";
 import { ToastProvider } from "@/components/Toast";
 import { buildAnalysisPdf } from "@/lib/analysis/pdf";
 import data from "./data.json";
@@ -211,6 +278,24 @@ createRoot(document.getElementById("root")!).render(
       <MissingCard title="Port congestion" period={d.week.label} onAdd={noop} />
     </div>
 
+    {/* The upload panel, twice: once holding a file with all three outcomes at
+        once, and once holding a clean one so the from → to preview is legible.
+        __dropFile below puts a file into each. */}
+    <OperationalUpload
+      week={d.week}
+      portVocabulary={d.ports}
+      congestion={d.sampleCongestion}
+      fleet={d.sampleFleet}
+      portCongestion={d.samplePorts}
+    />
+    <OperationalUpload
+      week={d.week}
+      portVocabulary={d.ports}
+      congestion={d.sampleCongestion}
+      fleet={d.sampleFleet}
+      portCongestion={d.samplePorts}
+    />
+
     {/* The entry grid, open, at full width with all five ports and seven days. */}
     <OperationalGrid
       week={d.week}
@@ -235,6 +320,28 @@ createRoot(document.getElementById("root")!).render(
   </div>
   </ToastProvider>
 );
+
+/**
+ * Hands a file to an upload panel, the way the browser's own file picker
+ * would. A file dialog cannot be driven from a test, and adding a test-only
+ * prop to the component would mean the thing on screen is not the thing that
+ * ships. A synthetic DataTransfer is the real input event, so React's onChange
+ * fires exactly as it does for a person choosing a file.
+ */
+(window as any).__dropFile = (index: number, name: string, text: string) => {
+  const input = document.querySelectorAll<HTMLInputElement>(".upload-input")[index];
+  const dt = new DataTransfer();
+  dt.items.add(new File([text], name, { type: "text/csv" }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  return name;
+};
+
+(window as any).__dropSamples = () => {
+  (window as any).__dropFile(0, "operational-" + d.week.label + ".csv", d.sampleUploadMessy);
+  (window as any).__dropFile(1, "operational-" + d.week.label + ".csv", d.sampleUploadClean);
+  return "dropped";
+};
 
 // Exposed so the verification step can build the REAL PDF — same function the
 // button calls — and post the bytes back to disk to be opened and looked at.
@@ -307,6 +414,7 @@ createRoot(document.getElementById("root")!).render(
     join(outDir, "action-stub.ts"),
     `export async function saveOperationalWeek() { return { ok: true, daysWritten: 0, portRowsWritten: 0 }; }
 export async function saveScheduleReliability() { return { ok: true }; }
+export async function applyOperationalUpload() { return { ok: true, valuesWritten: 0, daysWritten: 0 }; }
 `
   );
 
@@ -359,6 +467,10 @@ export async function saveScheduleReliability() { return { ok: true }; }
     join(outDir, "index.html"),
     `<!doctype html>
 <html><head><meta charset="utf-8">
+<!-- Without this a narrowed browser reports an 785px viewport and every
+     max-width media query keeps matching, so the mobile layout is never the
+     thing being looked at. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 ${css}
 :root {

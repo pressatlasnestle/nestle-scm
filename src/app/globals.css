@@ -860,6 +860,238 @@ tbody tr:hover td {
   border-bottom: none;
 }
 
+/* ---------------------------------------------------------------------------
+   The CSV upload, beside the grid.
+
+   Deliberately quieter than a chart card: it is a tool, not a finding. It sits
+   flat on the panel with a dashed edge so it never reads as a card carrying
+   data.
+   --------------------------------------------------------------------------- */
+.upload-panel {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px 16px;
+  margin-bottom: 18px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+}
+.upload-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.upload-head h3 {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.upload-lede {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 560px;
+}
+/* The blank rule, stated on screen in the words it is implemented in. Anyone
+   filling this in needs to know that clearing a cell does NOT clear the
+   figure — the opposite of what a spreadsheet trains you to expect. */
+.upload-rule {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin: 12px 0;
+}
+.upload-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* The native control is replaced by its own label, styled as a button. */
+.upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.upload-filename {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.upload-structural {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--coral);
+  background: var(--coral-dim);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+/* Three outcomes, always all three, so "nothing was recognised" is as visible
+   as "42 ready". A count that only appears when non-zero is a count nobody
+   looks for. */
+.upload-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.upload-count {
+  flex: 1 1 150px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.upload-count strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-dim);
+}
+.upload-count span {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.upload-count.is-ready strong {
+  color: var(--teal);
+}
+.upload-count.is-bad {
+  border-color: color-mix(in srgb, var(--coral) 45%, transparent);
+}
+.upload-count.is-bad strong {
+  color: var(--coral);
+}
+
+.upload-problems {
+  margin-top: 12px;
+  border-left: 2px solid var(--coral);
+  padding: 2px 0 2px 12px;
+}
+.upload-problems-lede {
+  font-size: 11.5px;
+  color: var(--coral);
+  margin-bottom: 6px;
+}
+.upload-problems ul,
+.upload-changes ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.upload-problems li {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.upload-more {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.upload-preview {
+  margin-top: 12px;
+}
+.upload-preview-lede {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.upload-changes {
+  margin-top: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 9px 11px;
+  /* Long weeks scroll here rather than pushing Save off the screen. */
+  max-height: 220px;
+  overflow-y: auto;
+}
+.upload-changes-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 7px;
+}
+/* A grid, not a flex row. Flexed, the label took the slack and pushed
+   "1500000 → 1650000" to the far edge of a 1200px panel, a foot away from the
+   thing it describes. Fixed columns keep the pair beside its label and align
+   the numbers down the list, which is how they get compared. */
+.upload-changes li {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 32em) max-content 12px max-content;
+  justify-content: start;
+  align-items: baseline;
+  column-gap: 10px;
+  font-size: 11.5px;
+}
+.upload-change-when {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.upload-change-what {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.upload-change-from {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+.upload-change-arrow {
+  color: var(--text-dim);
+}
+.upload-change-to {
+  font-family: var(--font-mono);
+  color: var(--amber);
+}
+
+.upload-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .upload-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .upload-count {
+    flex-basis: 100%;
+  }
+  .upload-actions .btn {
+    flex: 1 1 0;
+  }
+  /* At 375px five columns cannot fit. Back to a wrapping row, with the label
+     on a line of its own so "111 → 333" stays together on the next one. */
+  .upload-changes li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .upload-change-what {
+    flex-basis: 100%;
+  }
+}
+
 /* Queue/berth ratios under the per-port chart. Shown as published. */
 .port-ratios {
   display: flex;

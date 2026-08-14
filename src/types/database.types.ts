@@ -883,6 +883,10 @@ export type Database = {
       }
     }
     Functions: {
+      apply_operational_upload: {
+        Args: { p_payload: Json }
+        Returns: Json
+      }
       can_curate: { Args: never; Returns: boolean }
       current_app_role: { Args: never; Returns: string }
       get_integration_secret: {

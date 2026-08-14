@@ -33,6 +33,7 @@
     "check:pdf-text": "tsx scripts/checks/pdf-text.ts",
     "check:similarity": "tsx scripts/checks/similarity.ts",
     "check:operational": "tsx --env-file=.env.local scripts/checks/operational.ts",
+    "check:operational-upload": "tsx --env-file=.env.local scripts/checks/operational-upload.ts",
     "check:newsletter": "tsx --env-file=.env.local scripts/checks/newsletter.ts",
     "check:newsletter-visual": "tsx --env-file=.env.local scripts/checks/newsletter-visual.ts"
   },

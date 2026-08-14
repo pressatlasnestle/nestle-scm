@@ -8,6 +8,7 @@ import {
   FLEET_STATUSES,
   PORT_METRICS,
   PORTS_PER_DAY,
+  carriedPorts,
   type CongestionRow,
   type FleetStatusRow,
   type PortCongestionRow,
@@ -115,17 +116,10 @@ export function OperationalGrid({
    * the watchlist is fixed for a week and usually longer. Re-picking five
    * ports every Monday would be five avoidable interactions.
    */
-  const initialPorts = useMemo(() => {
-    const byDay = new Map<string, string[]>();
-    for (const row of portCongestion) {
-      const list = byDay.get(row.day_of) ?? [];
-      if (!list.includes(row.port_name)) list.push(row.port_name);
-      byDay.set(row.day_of, list);
-    }
-    const latest = [...byDay.keys()].sort().pop();
-    const carried = latest ? byDay.get(latest)! : [];
-    return Array.from({ length: PORTS_PER_DAY }, (_, i) => carried[i] ?? "");
-  }, [portCongestion]);
+  const initialPorts = useMemo(
+    () => carriedPorts(portCongestion),
+    [portCongestion]
+  );
 
   const [slotPorts, setSlotPorts] = useState<string[]>(initialPorts);
 

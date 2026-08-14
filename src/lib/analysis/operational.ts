@@ -83,6 +83,30 @@ export const RELIABILITY_ALLIANCES = [
 /** How many ports the entry grid offers. A UI convention, not a DB constraint. */
 export const PORTS_PER_DAY = 5;
 
+/**
+ * The ports on the watchlist, carried forward from the most recent entered day.
+ *
+ * The watchlist is fixed for a week and usually longer, so both entry surfaces
+ * start from what was last entered rather than asking for five port names
+ * again. Shared between the grid and the CSV template deliberately: the
+ * template must offer the same five rows the grid shows, and two copies of this
+ * rule would drift.
+ *
+ * Padded to PORTS_PER_DAY with "" for the grid's empty slots; the template
+ * filters those out, since a blank port name is not a row anyone can fill in.
+ */
+export function carriedPorts(rows: PortCongestionRow[]): string[] {
+  const byDay = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = byDay.get(row.day_of) ?? [];
+    if (!list.includes(row.port_name)) list.push(row.port_name);
+    byDay.set(row.day_of, list);
+  }
+  const latest = [...byDay.keys()].sort().pop();
+  const carried = latest ? byDay.get(latest)! : [];
+  return Array.from({ length: PORTS_PER_DAY }, (_, i) => carried[i] ?? "");
+}
+
 // ---------------------------------------------------------------------------
 // Stored shapes
 // ---------------------------------------------------------------------------

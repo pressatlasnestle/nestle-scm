@@ -22,6 +22,7 @@ import {
   ReliabilityCard,
 } from "./OperationalCards";
 import { OperationalGrid } from "./OperationalGrid";
+import { OperationalUpload } from "./OperationalUpload";
 import { OperationalEditModal, type FieldGroup } from "./OperationalEditModal";
 import { saveScheduleReliability } from "./operational-actions";
 
@@ -100,6 +101,22 @@ export function OperationalSection({
           </button>
         )}
       </div>
+
+      {/*
+        Beside the grid, not instead of it. Typing straight into the grid is
+        faster when the figures are already on screen; a spreadsheet is better
+        when someone else does the transcription, or when a whole week arrives
+        at once. Both write the same three tables on the same keys.
+      */}
+      {canCurate && (
+        <OperationalUpload
+          week={week}
+          portVocabulary={ports}
+          congestion={congestion}
+          fleet={fleet}
+          portCongestion={portCongestion}
+        />
+      )}
 
       <div className="chart-grid">
         {congestion.length > 0 ? (

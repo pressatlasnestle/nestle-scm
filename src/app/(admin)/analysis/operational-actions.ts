@@ -5,6 +5,12 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/auth";
 import { toActionError, type ActionResult } from "@/lib/actions/result";
 import { monthOf } from "@/lib/analysis/operational";
+import { parseCsv } from "@/lib/analysis/csv";
+import {
+  buildUploadPayload,
+  groupProblems,
+  parseUpload,
+} from "@/lib/analysis/operational-template";
 import { parseIsoDate } from "@/lib/analysis/week-period";
 import type { Json } from "@/types/database.types";
 
@@ -240,6 +246,133 @@ export async function saveOperationalWeek(
 
   revalidatePath(PATH);
   return { ok: true, daysWritten, portRowsWritten };
+}
+
+// ---------------------------------------------------------------------------
+// The CSV upload — a second way into the same three tables
+// ---------------------------------------------------------------------------
+
+export type UploadResult = ActionResult & {
+  valuesWritten?: number;
+  daysWritten?: number;
+};
+
+/**
+ * Applies an uploaded template.
+ *
+ * THE SERVER RE-PARSES THE FILE. The panel already parsed it to show the
+ * preview, but what arrives here is the file text, not the panel's conclusions.
+ * Parsing is pure and deterministic, so the second pass costs nothing and means
+ * a client that has been tampered with cannot write a value the file does not
+ * contain, or a port the file does not name.
+ *
+ * ALL OR NOTHING. Any row problem refuses the whole file — this is not a
+ * partial-import tool. A file with one unrecognised port leaves the database
+ * exactly as it was, so the fix is "correct that row and upload again" rather
+ * than "work out which of the other 300 rows went in".
+ *
+ * The write itself goes through apply_operational_upload(), a SECURITY INVOKER
+ * function, for the one thing PostgREST cannot give from here: a single
+ * transaction across three tables. can_curate() still decides, under the
+ * caller's own client, exactly as it does for the grid.
+ */
+export async function applyOperationalUpload(input: {
+  /** The uploaded file's text, verbatim. BOM and CRLF included. */
+  csv: string;
+  /** The seven days the template was generated for, YYYY-MM-DD. */
+  days: string[];
+  /** The five tracked ports it was generated with. */
+  ports: string[];
+  /** For the audit trail, so a figure can be traced back to a file. */
+  filename?: string;
+}): Promise<UploadResult> {
+  const { ctx, error } = await requireCurate();
+  if (!ctx) return { ok: false, error: error! };
+
+  for (const day of input.days) {
+    if (!parseIsoDate(day)) {
+      return { ok: false, error: `"${day}" is not a valid date.` };
+    }
+  }
+
+  const supabase = await createClient();
+
+  // The full vocabulary, not the five in the template: swapping a port in the
+  // file is legitimate, and the database will accept any name that exists.
+  const { data: portRows, error: portError } = await supabase
+    .from("ports")
+    .select("name")
+    .order("name");
+  if (portError) return { ok: false, error: toActionError(portError) };
+
+  const plan = parseUpload(parseCsv(input.csv), {
+    days: input.days,
+    ports: input.ports,
+    portVocabulary: (portRows ?? []).map((p) => p.name),
+  });
+
+  if (plan.structuralError) return { ok: false, error: plan.structuralError };
+  if (plan.problems.length > 0) {
+    // The panel already listed these; this is the backstop for a file that got
+    // here another way. Grouped, so one renamed port is one sentence.
+    const groups = groupProblems(plan.problems);
+    const rest = groups.length - 1;
+    return {
+      ok: false,
+      error:
+        `${groups[0].label}: ${groups[0].message}` +
+        (rest > 0 ? ` (and ${rest} other problem${rest === 1 ? "" : "s"}.)` : ""),
+    };
+  }
+  if (plan.values.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Every cell in that file is empty, so there is nothing to save. Fill in the Value column and upload it again.",
+    };
+  }
+
+  const payload = buildUploadPayload(plan.values);
+
+  const { error: writeError } = await supabase.rpc("apply_operational_upload", {
+    p_payload: payload as unknown as Json,
+  });
+  if (writeError) {
+    // An unknown port trips the foreign key. Name it, rather than surfacing a
+    // constraint name — and nothing was written, because the function body is
+    // one transaction.
+    if (writeError.code === "23503") {
+      return {
+        ok: false,
+        error:
+          "One of the port names in that file is not in the port list, so nothing was saved. Download the template again — it names the ports for you.",
+      };
+    }
+    return { ok: false, error: toActionError(writeError) };
+  }
+
+  await supabase.from("audit_log").insert({
+    actor_id: ctx.userId,
+    action: "operational_data.update",
+    target_type: "operational_week",
+    target_id: null,
+    metadata: {
+      // Same action as the grid, because it is the same change to the same
+      // tables. The source distinguishes them when reading the log back.
+      source: "csv_upload",
+      filename: input.filename ?? null,
+      days: plan.days,
+      blank_cells: plan.blank,
+      entries: [payload as unknown as Json],
+    },
+  });
+
+  revalidatePath(PATH);
+  return {
+    ok: true,
+    valuesWritten: plan.values.length,
+    daysWritten: plan.days.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

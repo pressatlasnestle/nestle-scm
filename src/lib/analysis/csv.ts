@@ -64,6 +64,102 @@ function escapeCell(value: CsvValue): string {
   return guarded;
 }
 
+/**
+ * Reads CSV text into rows of cells.
+ *
+ * Written for files that have been round-tripped through Excel on Windows,
+ * because that is what will happen to every one of them:
+ *
+ *   * A UTF-8 BOM is stripped. Excel writes one, and left in place it becomes
+ *     part of the first header cell, so "Date" arrives as "﻿Date" and a
+ *     header comparison fails for a reason nobody can see. The port list this
+ *     project seeded from arrived with a BOM.
+ *   * CRLF, LF and lone CR all end a line.
+ *   * Quoted fields may contain commas, newlines and doubled quotes.
+ *   * A trailing blank line is dropped rather than becoming a row of empties,
+ *     since Excel adds one and it would otherwise be reported as a bad row.
+ *
+ * Deliberately not a dependency. The dialect above is small, fully specified,
+ * and the one thing a parser here must never do is silently skip a row it
+ * cannot read — which is exactly what a lenient third-party default tends to
+ * do.
+ */
+export function parseCsv(text: string): string[][] {
+  const input = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let i = 0;
+
+  const endField = () => {
+    row.push(field);
+    field = "";
+  };
+  const endRow = () => {
+    endField();
+    rows.push(row);
+    row = [];
+  };
+
+  while (i < input.length) {
+    const ch = input[i];
+
+    if (quoted) {
+      if (ch === '"') {
+        if (input[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        quoted = false;
+        i += 1;
+        continue;
+      }
+      field += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      quoted = true;
+      i += 1;
+      continue;
+    }
+    if (ch === ",") {
+      endField();
+      i += 1;
+      continue;
+    }
+    if (ch === "\r") {
+      endRow();
+      // CRLF is one terminator, not two.
+      i += input[i + 1] === "\n" ? 2 : 1;
+      continue;
+    }
+    if (ch === "\n") {
+      endRow();
+      i += 1;
+      continue;
+    }
+
+    field += ch;
+    i += 1;
+  }
+
+  // Whatever is left is the last row, unless the file ended on a newline.
+  if (field !== "" || row.length > 0) endRow();
+
+  // Excel's trailing newline produces one empty row; drop only that, never a
+  // row that has any content in any cell.
+  while (rows.length > 0 && rows[rows.length - 1].every((c) => c.trim() === "")) {
+    rows.pop();
+  }
+
+  return rows;
+}
+
 /** Builds the CSV text. Exported separately so it can be checked without a DOM. */
 export function toCsv<T>(rows: T[], columns: CsvColumn<T>[]): string {
   const lines = [columns.map((c) => escapeCell(c.header)).join(",")];
