@@ -351,6 +351,72 @@ export type Database = {
           },
         ]
       }
+      newsletter_editions: {
+        Row: {
+          entered_at: string
+          entered_by: string | null
+          headline_read: string | null
+          id: string
+          included_article_ids: string[] | null
+          month_of: string
+          recommended_actions: Json | null
+          regional_commentary: string | null
+          reliability_note: string | null
+          sent_at: string | null
+          sent_by: string | null
+          snapshot: Json | null
+          status: string
+          watch_list: Json | null
+        }
+        Insert: {
+          entered_at?: string
+          entered_by?: string | null
+          headline_read?: string | null
+          id?: string
+          included_article_ids?: string[] | null
+          month_of: string
+          recommended_actions?: Json | null
+          regional_commentary?: string | null
+          reliability_note?: string | null
+          sent_at?: string | null
+          sent_by?: string | null
+          snapshot?: Json | null
+          status?: string
+          watch_list?: Json | null
+        }
+        Update: {
+          entered_at?: string
+          entered_by?: string | null
+          headline_read?: string | null
+          id?: string
+          included_article_ids?: string[] | null
+          month_of?: string
+          recommended_actions?: Json | null
+          regional_commentary?: string | null
+          reliability_note?: string | null
+          sent_at?: string | null
+          sent_by?: string | null
+          snapshot?: Json | null
+          status?: string
+          watch_list?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "newsletter_editions_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "newsletter_editions_sent_by_fkey"
+            columns: ["sent_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       operational_congestion: {
         Row: {
           entered_at: string

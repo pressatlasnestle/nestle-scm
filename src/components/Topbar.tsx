@@ -28,7 +28,7 @@ const TITLES: Record<string, [string, string]> = {
   "/recipients": ["Recipients", "The Monday digest distribution list."],
   "/newsletter": [
     "Newsletter",
-    "Preview of the Monday digest, generated from the shared report template.",
+    "Compose the monthly Ocean Freight Update — AOA, then export it to paste out.",
   ],
   "/audit-log": [
     "Audit Log",

@@ -1321,3 +1321,375 @@ tbody tr:hover td {
   color: var(--coral);
   font-size: 12.5px;
 }
+
+/* ---------- Newsletter composer ----------
+   Two columns that never blend: authored on the left, generated on the right.
+   The split is the feature, so it is a layout rule rather than a heading.
+   Below 1080px they stack, authored first — the column a curator actually
+   works in should not be the one they scroll past. */
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.composer-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-width: 0;
+}
+.composer-col-head {
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.composer-col-head .eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--teal);
+  margin-bottom: 6px;
+}
+.composer-col-head p {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+.composer-block {
+  margin-top: 4px;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* ---------- Notices ----------
+   One shape for every "read this before you go on" block on the panel, so a
+   frozen edition, a load failure and a dropped section are visibly the same
+   kind of statement in three different colours. */
+.notice {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 15px;
+  margin-bottom: 16px;
+  background: var(--panel);
+}
+.notice .eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.notice p {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.notice-error {
+  background: var(--coral-dim);
+  border-color: rgba(240, 112, 95, 0.38);
+}
+.notice-error .eyebrow {
+  color: var(--coral);
+}
+.notice-warn {
+  background: var(--amber-dim);
+  border-color: rgba(240, 174, 78, 0.34);
+}
+.notice-warn .eyebrow {
+  color: var(--amber);
+}
+.notice-frozen {
+  background: var(--teal-dim);
+  border-color: rgba(47, 217, 199, 0.32);
+}
+.notice-frozen .eyebrow {
+  color: var(--teal);
+}
+.dropped-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.dropped-list li {
+  padding: 3px 0;
+}
+.dropped-list b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------- Authored fields ---------- */
+.authored-field {
+  margin-bottom: 22px;
+}
+.authored-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+.authored-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin-bottom: 9px;
+}
+.authored-input {
+  width: 100%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  font-family: var(--font-body);
+  resize: vertical;
+}
+.authored-input::placeholder {
+  color: var(--text-dim);
+}
+.authored-input:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+.authored-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.authored-foot {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+.frozen-text {
+  background: var(--panel-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 11px 13px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+.frozen-actions {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* ---------- Watch list & actions repeaters ---------- */
+.watch-row {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--panel-raised);
+}
+.watch-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.watch-row-index {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  color: var(--indigo);
+}
+.watch-field {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.watch-field > span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.action-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.action-index {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--indigo);
+}
+.action-controls {
+  display: flex;
+  gap: 3px;
+}
+
+/* ---------- Press picker ---------- */
+.press-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 9px 12px;
+  background: var(--panel-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.press-summary strong {
+  color: var(--teal);
+  font-family: var(--font-mono);
+}
+.press-empty {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+.press-theme {
+  margin-bottom: 16px;
+}
+.press-theme-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.press-theme-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.press-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+.press-item:last-child {
+  border-bottom: none;
+}
+.press-item input {
+  margin-top: 3px;
+  accent-color: var(--teal);
+}
+/* Toggled-out rows stay legible rather than being greyed to the point of
+   looking broken — the curator has to be able to read what they removed. */
+.press-item-out .press-headline {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+.press-headline {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+.press-summary-line {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+.press-meta {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.press-flag {
+  margin-left: 8px;
+  color: var(--amber);
+}
+
+/* ---------- Preview ---------- */
+.preview-actions {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.preview-subject {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.preview-subject code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 4px 9px;
+}
+/* The frame is centred on a neutral ground rather than flush to the card, so
+   the 375px width reads as a narrow email and not as a broken layout. */
+.preview-frame {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg);
+}
+.preview-frame iframe {
+  height: 720px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef2f7;
+  display: block;
+}
+.preview-export {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line-soft);
+}

@@ -13,6 +13,9 @@ const ALL_ITEMS: (NavItem & { adminOnly: boolean })[] = [
   { label: "Users & Roles", href: "/users", adminOnly: true },
   { label: "Integrations", href: "/integrations", adminOnly: true },
   { label: "Recipients", href: "/recipients", adminOnly: false },
+  // Read-visible to every role, same tier as Analysis: anyone may read an
+  // edition, and composing or sending checks canCurate in the server action
+  // and again in the table's RLS policy.
   { label: "Newsletter", href: "/newsletter", adminOnly: false },
   { label: "Audit Log", href: "/audit-log", adminOnly: true },
 ];
