@@ -1555,20 +1555,127 @@ tbody tr:hover td {
 }
 
 /* ---------- Newsletter composer ----------
-   Two columns that never blend: authored on the left, generated on the right.
-   The split is the feature, so it is a layout rule rather than a heading.
-   Below 1080px they stack, authored first — the column a curator actually
-   works in should not be the one they scroll past. */
+   Content and Preview side by side; the article list full width underneath.
+   The person using this is editing text and checking how it reads, and those
+   two things belong next to each other — every edit should be visible in the
+   preview without scrolling or switching. Choosing articles is a different job,
+   done once and then left alone, so it does not get a permanent third of the
+   screen.
+
+   THE PREVIEW COLUMN IS SIZED TO THE EMAIL, NOT TO A FRACTION. The email is
+   capped at 640px, and a preview that renders it at 600 is lying about what the
+   recipient sees, which defeats the point of having one. So the preview track
+   is minmax(672px, 60fr): 672 is 640 plus the frame's border and padding, and
+   naming it as a MINIMUM means the content column gives way first when the
+   window narrows. A plain 60fr computes to about 668px inside a 1180px page —
+   six pixels short, and silently compressing. */
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 40fr) minmax(672px, 60fr);
   gap: 18px;
+  /* Load-bearing for the sticky preview: a stretched grid item is already as
+     tall as the row, and a sticky element cannot move inside a box it fills. */
   align-items: start;
 }
-@media (max-width: 1080px) {
+/* HOW FAR THE PREVIEW TRAVELS, and why it is not further.
+   A sticky grid item is constrained by its GRID AREA, not by the container's
+   padding box — padding-bottom here does nothing for it and only lengthens the
+   page, which makes the drift worse. The travel is therefore
+   (content column height − preview height), and the page scrolls a little
+   further than that because the articles panel sits below the grid. In
+   practice the preview holds position throughout the sections and gives up
+   about 80px of its own toolbar at the very end of the page, with the whole
+   email still on screen. Making it exact would cost either dead space inside
+   the content column or permanent height off the preview, and both are worse
+   than an 80px drift at the one scroll position where the job has moved on to
+   choosing articles. */
+/* Below this the two columns stop being worth it — keeping them would mean a
+   cramped preview, which is the one thing the layout exists to avoid. Content
+   first, then preview, then articles. */
+@media (max-width: 1100px) {
   .composer {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* The preview stays put while the content column scrolls past it. Editing a
+   section near the bottom must not scroll the preview away — that is the whole
+   arrangement, and without this it is just two tall columns. */
+.composer-preview {
+  position: sticky;
+  top: 18px;
+  /* HEIGHT, not max-height. A max only caps a box that already wants to be
+     tall, and this one shrinks to its content — which left the email showing
+     through a 320px slot with a full viewport of empty column beside it. */
+  height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.composer-preview .chart-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* The frame takes the leftover height and the EMAIL scrolls inside its own
+   iframe, so the preview behaves like a mail client rather than like a very
+   tall image. */
+.composer-preview .preview-frame {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.composer-preview .preview-frame iframe {
+  height: 100%;
+  min-height: 320px;
+}
+@media (max-width: 1100px) {
+  .composer-preview {
+    position: static;
+    max-height: none;
+  }
+  .composer-preview .preview-frame iframe {
+    height: 720px;
+  }
+}
+
+/* ---------- Articles, full width below ---------- */
+.articles-panel {
+  margin-top: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+/* The heading and the count stay visible whether it is open or shut, so it is
+   obvious what the section is and that it is not empty without opening it. */
+.articles-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 15px 18px;
+}
+.articles-head h2 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+}
+.articles-head p {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.articles-count {
+  font-family: var(--font-mono);
+  color: var(--teal);
+}
+.articles-body {
+  padding: 0 18px 18px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 16px;
 }
 .composer-col {
   background: var(--panel);
@@ -1838,7 +1945,7 @@ tbody tr:hover td {
 .preview-frame {
   display: flex;
   justify-content: center;
-  padding: 16px;
+  padding: 8px;
   background: var(--bg);
 }
 .preview-frame iframe {
@@ -1923,4 +2030,52 @@ tbody tr:hover td {
 }
 .section-protected {
   color: var(--teal);
+}
+
+/* The whole-edition controls, gathered into the page header. */
+.composer-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  /* NOT flex-shrink: 0. The week option text — "10–16 Aug 2026 · in progress ·
+     96 coded so far" — gives the select an intrinsic width around 300px, and a
+     bar that refuses to shrink carried that plus two buttons straight off the
+     side of a phone. It shrinks, and its row wraps. */
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-bar-row select {
+  min-width: 0;
+}
+.composer-bar-note {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+/* Below this the header stops being a row: the heading takes the full width and
+   the controls sit under it, left-aligned, with the week select on its own
+   line rather than squeezed beside two buttons. */
+@media (max-width: 720px) {
+  .panel-head {
+    flex-wrap: wrap;
+  }
+  .composer-bar {
+    width: 100%;
+    align-items: stretch;
+  }
+  .composer-bar-row {
+    justify-content: flex-start;
+  }
+  .composer-bar-row select {
+    flex: 1 1 100%;
+  }
 }

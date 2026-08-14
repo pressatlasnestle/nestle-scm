@@ -482,8 +482,59 @@ ${css}
 }
 body { background: var(--bg); color: var(--text); font-family: var(--font-body); }
 .content { max-width: 1180px; margin: 0 auto; padding: 24px; }
+#harness-check {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 99;
+  font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px;
+  padding: 7px 14px; border-top: 1px solid var(--line);
+}
+#harness-check.pass { background: #14312c; color: #2fd9c7; }
+#harness-check.fail { background: #3a1d1a; color: #f0705f; }
 </style></head>
-<body><div id="root"></div><script>${bundle}</script></body></html>`
+<body><div id="root"></div><script>${bundle}</script>
+<script>
+/**
+ * THE ONE ASSERTION THIS LAYOUT NEEDS, made where it can actually be made.
+ *
+ * The email is capped at 640px. A preview column that renders it narrower is
+ * lying about what the recipient sees, which defeats the point of having a
+ * preview — and it fails silently, because a squeezed email still looks like an
+ * email. It can only be measured in a browser, so it is measured here and the
+ * result is on the page rather than in a log nobody re-reads.
+ *
+ * Re-checked on resize, because the failure is a function of window width.
+ */
+(function () {
+  var el = document.createElement("div");
+  el.id = "harness-check";
+  document.body.appendChild(el);
+
+  function measure() {
+    var frame = document.querySelector(".composer-preview iframe");
+    var col = document.querySelector(".composer-preview");
+    if (!frame || !col) { el.textContent = "waiting for the preview to mount…"; return; }
+    var w = Math.round(frame.getBoundingClientRect().width);
+    var colW = Math.round(col.getBoundingClientRect().width);
+    var vw = document.documentElement.clientWidth;
+    var stacked = vw <= 1100;
+    var overflow = document.documentElement.scrollWidth > vw + 1;
+    // Below the stacking breakpoint the column is full width and the 375px
+    // preview button legitimately narrows the frame, so the 640 floor only
+    // applies to the desktop two-column case at the design width.
+    var ok = (stacked || w >= 640) && !overflow;
+    el.className = ok ? "pass" : "fail";
+    el.textContent =
+      (ok ? "PASS  " : "FAIL  ") +
+      "viewport " + vw + "px · " + (stacked ? "stacked" : "two columns") +
+      " · preview column " + colW + "px · email rendered at " + w + "px" +
+      (stacked ? "" : " (must be >= 640)") +
+      " · page overflow: " + (overflow ? "YES" : "none");
+  }
+
+  setTimeout(measure, 120);
+  window.addEventListener("resize", function () { setTimeout(measure, 60); });
+})();
+</script>
+</body></html>`
   );
 
   console.log(`\nOpen:\n  ${join(outDir, "email-widths.html")}\n  ${join(outDir, "index.html")}`);

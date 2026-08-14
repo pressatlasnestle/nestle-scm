@@ -113,6 +113,9 @@ export function NewsletterComposer({
   const [included, setIncluded] = useState<string[] | null>(includedArticleIds);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [confirmSend, setConfirmSend] = useState(false);
+  // Shut on arrival. The heading and count are visible either way, and the top
+  // of the page is calmer for the job that is actually being done here.
+  const [articlesOpen, setArticlesOpen] = useState(false);
 
   const busy = busyKey !== null;
 
@@ -252,25 +255,64 @@ export function NewsletterComposer({
             here — you copy the finished newsletter out at the bottom.
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <WeekSelect
-            options={weeks.map((w) => {
-              const count = weekCounts[w.start] ?? 0;
-              const inProgress = isRunningWeek(w, nowDate);
-              const state = statusByWeek.get(w.start);
-              return {
-                week: w,
-                notes: [
-                  inProgress ? "in progress" : null,
-                  `${count} coded${inProgress ? " so far" : ""}`,
-                  state === "sent" ? "sent" : state ? "draft" : null,
-                ],
-              };
-            })}
-            value={week.start}
-            disabled={navigating || busy}
-            onChange={selectWeek}
-          />
+        {/* Week, Generate and Send together in one bar. They are the three
+            things you do to a whole edition; having them in three different
+            places was most of why this screen read as three panels. */}
+        <div className="composer-bar">
+          <div className="composer-bar-row">
+            <WeekSelect
+              options={weeks.map((w) => {
+                const count = weekCounts[w.start] ?? 0;
+                const inProgress = isRunningWeek(w, nowDate);
+                const state = statusByWeek.get(w.start);
+                return {
+                  week: w,
+                  notes: [
+                    inProgress ? "in progress" : null,
+                    `${count} coded${inProgress ? " so far" : ""}`,
+                    state === "sent" ? "sent" : state ? "draft" : null,
+                  ],
+                };
+              })}
+              value={week.start}
+              disabled={navigating || busy}
+              onChange={selectWeek}
+            />
+            {editable && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy}
+                  onClick={generateAll}
+                >
+                  {busyKey === "generate" ? "Writing…" : "Generate newsletter"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={busy || nothingToSend}
+                  title={
+                    nothingToSend
+                      ? "There is nothing in this newsletter yet."
+                      : "Finish this newsletter and get it ready to copy out."
+                  }
+                  onClick={() => setConfirmSend(true)}
+                >
+                  Send
+                </button>
+              </>
+            )}
+          </div>
+          {editable && (
+            <div className="composer-bar-note">
+              {savedAt
+                ? `Last saved ${fullDayLabel(savedAt.slice(0, 10))}.`
+                : exists
+                  ? "Saved."
+                  : "Nothing saved yet."}
+            </div>
+          )}
         </div>
       </div>
 
@@ -327,28 +369,37 @@ export function NewsletterComposer({
         </div>
       )}
 
+      {droppedBlocks.length > 0 && (
+        <div className="notice notice-warn">
+          <div className="eyebrow">Left out of this newsletter</div>
+          <ul className="dropped-list">
+            {droppedBlocks.map((b) => (
+              <li key={b.key}>
+                <b>{b.title}</b> — {b.reason}
+              </li>
+            ))}
+          </ul>
+          <p className="cell-sub" style={{ marginTop: 8 }}>
+            These are missing because there is no data behind them, not because
+            anything is broken. The newsletter simply does not include them — no
+            empty headings, no blank charts. This list is only shown here; it is
+            not part of what you send.
+          </p>
+        </div>
+      )}
+
       <div className="composer">
-        {/* ---------------- Written sections ---------------- */}
+        {/* ---------------- Content ---------------- */}
         <div className="composer-col">
           <div className="composer-col-head">
             <div>
-              <div className="eyebrow">The newsletter&apos;s words</div>
+              <div className="eyebrow">Content</div>
               <p>
                 Written by the AI from this week&apos;s figures and articles, and
                 from nothing else. Edit anything you want to change — an edited
                 section is never overwritten by Generate newsletter.
               </p>
             </div>
-            {editable && (
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy}
-                onClick={generateAll}
-              >
-                {busyKey === "generate" ? "Writing…" : "Generate newsletter"}
-              </button>
-            )}
           </div>
 
           {SECTION_SLOTS.map((slot) => (
@@ -364,48 +415,64 @@ export function NewsletterComposer({
           ))}
         </div>
 
-        {/* ---------------- Data ---------------- */}
-        <div className="composer-col">
-          <div className="composer-col-head">
-            <div>
-              <div className="eyebrow">The figures and the coverage</div>
-              <p>
-                Read straight from the database. Market figures are the most
-                recent day entered in the week, compared with the most recent day
-                of the week before. Schedule reliability is monthly and compared
-                with the previous month — the newsletter says so.
-              </p>
-            </div>
-          </div>
-
-          {droppedBlocks.length > 0 && (
-            <div className="notice notice-warn">
-              <div className="eyebrow">
-                Left out of this newsletter
+        {/* ---------------- Preview ----------------
+            Sticky, its own scroll. Deliberately NOT linked to the content
+            column beyond showing the current text: no scroll syncing, no
+            highlighting the section being edited. That kind of cleverness is
+            what makes a simple screen confusing again. */}
+        <div className="composer-preview">
+          {html ? (
+            <EditionPreview
+              html={html}
+              subject={frozen ? snapshot?.subject ?? subjectLine(week) : subjectLine(week)}
+              filename={`ocean-freight-update-${week.isoLabel}.html`}
+              frozen={frozen}
+            />
+          ) : (
+            <div className="chart-card">
+              <div className="chart-head">
+                <div>
+                  <h3>Preview</h3>
+                  <p>Nothing to show yet.</p>
+                </div>
               </div>
-              <ul className="dropped-list">
-                {droppedBlocks.map((b) => (
-                  <li key={b.key}>
-                    <b>{b.title}</b> — {b.reason}
-                  </li>
-                ))}
-              </ul>
-              <p className="cell-sub" style={{ marginTop: 8 }}>
-                These are missing because there is no data behind them, not
-                because anything is broken. The newsletter simply does not
-                include them — no empty headings, no blank charts. This list is
-                only shown here; it is not part of what you send.
-              </p>
             </div>
           )}
+        </div>
+      </div>
 
-          <div className="composer-block">
-            <div className="authored-label">Articles in this newsletter</div>
-            <div className="authored-hint">
+      {/* ---------------- Articles, full width ----------------
+          A different job from writing: chosen once, then left alone. It does
+          not earn a permanent third of the screen, so it sits underneath — and
+          starts shut, with its heading and count visible either way so nobody
+          has to open it to see it is not empty. */}
+      <div className="articles-panel">
+        <div className="articles-head">
+          <div>
+            <h2>
+              Articles in this edition —{" "}
+              <span className="articles-count">
+                {edition?.generated.press.shown ?? 0} of{" "}
+                {edition?.generated.press.candidates ?? 0}
+              </span>
+            </h2>
+            <p>
               Every coded article published {rangeLabel}
               {running ? " so far" : ""}. Switch off anything that should not go
-              out. The AI writes from whatever is switched on.
-            </div>
+              out — the AI writes from whatever is switched on.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-expanded={articlesOpen}
+            onClick={() => setArticlesOpen((open) => !open)}
+          >
+            {articlesOpen ? "Hide articles" : "Show articles"}
+          </button>
+        </div>
+        {articlesOpen && (
+          <div className="articles-body">
             {frozen ? (
               <FrozenPress edition={edition} />
             ) : input ? (
@@ -417,46 +484,8 @@ export function NewsletterComposer({
               />
             ) : null}
           </div>
-        </div>
+        )}
       </div>
-
-      {html && (
-        <div style={{ marginTop: 20 }}>
-          <EditionPreview
-            html={html}
-            subject={frozen ? snapshot?.subject ?? subjectLine(week) : subjectLine(week)}
-            filename={`ocean-freight-update-${week.isoLabel}.html`}
-            frozen={frozen}
-          />
-        </div>
-      )}
-
-      {editable && (
-        <div className="composer-actions">
-          <div className="cell-sub">
-            {savedAt
-              ? `Last saved ${fullDayLabel(savedAt.slice(0, 10))}.`
-              : exists
-                ? "Saved."
-                : "Nothing saved yet."}
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy || nothingToSend}
-              title={
-                nothingToSend
-                  ? "There is nothing in this newsletter yet."
-                  : "Finish this newsletter and get it ready to copy out."
-              }
-              onClick={() => setConfirmSend(true)}
-            >
-              Send
-            </button>
-          </div>
-        </div>
-      )}
 
       {!canCurate && (
         <div className="panel-foot-note">
@@ -480,8 +509,8 @@ export function NewsletterComposer({
               </p>
             )}
             <p style={{ marginBottom: 10 }}>
-              This saves exactly what you see below and locks it. It will not
-              change afterwards, and it cannot be edited or re-sent.
+              This saves exactly what you see in the preview and locks it. It
+              will not change afterwards, and it cannot be edited or re-sent.
             </p>
             {droppedBlocks.length > 0 && (
               <p>
