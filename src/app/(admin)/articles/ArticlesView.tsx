@@ -66,6 +66,8 @@ export type ArticleRow = {
   coded_status: string | null;
   ai_sentiment: string | null;
   ai_themes: string[] | null;
+  ai_relevance_score: number | null;
+  impact_rationale: string | null;
 };
 
 export type FilterState = {
@@ -226,13 +228,32 @@ function sentimentCell(row: ArticleRow) {
       <span
         className="badge"
         style={{ background: style.bg, color: style.color }}
-        title={`Favourability from a cargo owner's perspective: ${row.ai_sentiment}`}
+        title={
+          // The rationale is the only part of the grade a curator can check
+          // against the article, so it belongs on the grade itself rather than
+          // in a column they have to go looking for.
+          row.impact_rationale
+            ? `${row.ai_sentiment} — ${row.impact_rationale}`
+            : `Favourability for Nestlé AOA container movement: ${row.ai_sentiment}`
+        }
       >
         {/* "Very" prefixed tiers get a double mark so the extremes are
             distinguishable at a glance without a second colour. */}
         {row.ai_sentiment.startsWith("Very ") ? "±± " : "± "}
         {row.ai_sentiment}
       </span>
+      {row.ai_relevance_score !== null && (
+        // Magnitude sits next to direction, because either alone misleads: a
+        // 'Very unfavourable' at relevance 5 and one at 95 are not the same
+        // story, and the tier cannot tell them apart.
+        <span
+          className="mono-dim"
+          style={{ fontSize: 11 }}
+          title="Relevance to Nestlé AOA container movement, 0-100. Magnitude — separate from the direction above."
+        >
+          relevance {row.ai_relevance_score}
+        </span>
+      )}
       {themes.length > 0 && (
         <span className="mono-dim" style={{ fontSize: 11 }} title={themes.join(" · ")}>
           {themes.slice(0, 2).join(" · ")}

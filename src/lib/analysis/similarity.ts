@@ -90,23 +90,63 @@ export function headlineSimilarity(a: string, b: string): number {
 }
 
 /**
- * Default threshold.
+ * Default threshold. Lowered 0.82 → 0.70 on measured evidence.
  *
- * Calibrated against real headlines from this corpus rather than picked round:
+ * WHY IT MOVED. 0.82 was calibrated against constructed examples — a headline
+ * against itself plus " - Reuters" scores 0.92, plus " - Ship & Bunker" 0.88 —
+ * and those numbers were right. What was never checked is whether real pairs
+ * land there. They do not.
  *
- *   1.00  the two Singapore/Colombo captures — byte-identical           merge
- *   0.92  a headline against itself plus " - Reuters"                   merge
- *   0.88  a headline against itself plus " - Ship & Bunker"             merge
- *   0.40  "Maersk and Hapag-Lloyd Return More Services to Suez Canal
- *          - Jordan News" against "Hapag-Lloyd and Maersk Move Another
- *          Joint Service to Red Sea - Ship & Bunker"                    keep
+ * Every pair of coded articles sharing a theme and a polarity, 161 articles,
+ * 1806 comparable pairs:
  *
- * That last pair is the one that matters. Both are in the same theme, the same
- * polarity and the same day, they share carrier names and half their function
- * words, and they are genuinely different stories. 0.82 sits far above it and
- * comfortably below every syndication variant.
+ *   1.00        17 pairs      byte-identical after normalisation
+ *   0.82-1.00    0 pairs      <-- EMPTY
+ *   0.75-0.82    2 pairs
+ *   0.70-0.75    3 pairs
+ *   0.65-0.70    0 pairs
+ *   0.60-0.65    3 pairs
+ *   0.50-0.60   21 pairs
+ *
+ * The band between 0.82 and 1.00 is empty. At 0.82 this function was doing
+ * nothing that the `normA === normB` short-circuit above it does not already
+ * do — every "catch" it made was an exact match. The publisher-suffix case it
+ * was tuned for exists in theory and did not occur in 1806 real pairs, because
+ * the suffix is stripped at ingestion (stripPublisherSuffix) before the row is
+ * ever stored.
+ *
+ * WHERE 0.70 COMES FROM. Every pair in [0.55, 1.00) was read by eye. Ranked:
+ *
+ *   0.778  PSA Antwerp adds new STS crane / PSA Belgium adds 14th STS crane
+ *   0.750  Diversions Surge 360% Amid Hormuz Closure /
+ *          Hormuz Closure Sends Diversions Surging 360%
+ *   0.727  ...'Ice Silk Road' through Arctic / ...in Russian Arctic waters
+ *   0.700  Indian exporters suffer twists and turns of freight amid Lanka,
+ *          Singapore transhipment jam / Indian Exporters Suffer Twists & Turns
+ *          of Freight                                          (x2 captures)
+ *   ------------------------------------------------ 0.70 threshold
+ *   0.643  Return of container ships to Red Sea edges closer ± subtitle
+ *   0.632  MSC Shipmanagement Fined $6 Million 'Runaway Ship' /
+ *          MSC fined $6 million over Charleston vessel incident
+ *   0.600  A Red Sea return would be a game changer in 2026 /
+ *          Red Sea Return Imminent For Container Shipping      GENUINELY DIFFERENT
+ *   0.583  ...game changer... / Red Sea return could flood capacity  DIFFERENT
+ *
+ * 0.643 and 0.632 ARE duplicates and are deliberately left uncaught. Taking
+ * them needs 0.63, which sits 0.032 above the first genuine false positive at
+ * 0.600 — and "these two are different stories" at 0.600 is a judgement call,
+ * not ground truth. A margin of 0.032 resting on a judgement call is not a
+ * margin. 0.70 keeps 0.10 of clearance below the nearest false positive and
+ * takes five of the seven real duplicates.
+ *
+ * WHAT THIS STILL CANNOT DO, unchanged from the header note: the Arctic
+ * paraphrase family scores 0.148 to 0.571 — "China Set To Launch Arctic 'Ice
+ * Silk Road'" against "China's First Weekly Arctic Container Service Debuts"
+ * is 0.148, one story in two vocabularies. No token-overlap threshold reaches
+ * that without sweeping up everything at 0.55-0.60, which is where the genuine
+ * false positives live. That needs semantic comparison and is not this.
  */
-export const NEAR_DUPLICATE_THRESHOLD = 0.82;
+export const NEAR_DUPLICATE_THRESHOLD = 0.7;
 
 /**
  * Minimum tokens before the score is trusted.
