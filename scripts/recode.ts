@@ -59,31 +59,66 @@ import {
  */
 const CHUNK = 20;
 
+/** The five bands, in order, so a cross-tab has stable columns. */
+const BANDS = [
+  "0-19  none",
+  "20-39 indirect",
+  "40-59 modest",
+  "60-79 material",
+  "80-100 severe",
+] as const;
+
 type Snapshot = {
   total: number;
   byTier: Record<string, number>;
+  byImpactKind: Record<string, number>;
+  /** tier → band → count. The table the tier distribution alone concealed. */
+  crossTab: Record<string, Record<string, number>>;
   withRelevance: number;
   withRationale: number;
   relevanceInRange: number;
+  /** Rows proving the axes are not fused. See printIndependence(). */
+  neutralAtOrAbove40: number;
+  nonNeutralBelow20: number;
+  /** Rationales still reaching for the stock phrase the last prompt rewarded. */
+  stockPhrase: number;
 };
+
+const STOCK_PHRASE =
+  /\b(names?|identif\w+|specif\w+)\b[^.]*\bno\b[^.]*\b(lane|port|service|cost)\b|\bnames? no (specific|identifiable)\b/i;
 
 async function snapshot(
   client: ReturnType<typeof createAdminClient>
 ): Promise<Snapshot> {
   const { data } = await client
     .from("articles")
-    .select("ai_sentiment, ai_relevance_score, impact_rationale")
+    .select("ai_sentiment, ai_relevance_score, impact_rationale, impact_kind")
     .eq("coded_status", "coded");
 
   const rows = data ?? [];
   const byTier: Record<string, number> = {};
+  const byImpactKind: Record<string, number> = {};
+  const crossTab: Record<string, Record<string, number>> = {};
+
   for (const r of rows) {
     const t = r.ai_sentiment ?? "(none)";
     byTier[t] = (byTier[t] ?? 0) + 1;
+
+    const k = r.impact_kind ?? "(unset)";
+    byImpactKind[k] = (byImpactKind[k] ?? 0) + 1;
+
+    if (r.ai_relevance_score !== null) {
+      const band = relevanceBand(r.ai_relevance_score);
+      crossTab[t] ??= {};
+      crossTab[t][band] = (crossTab[t][band] ?? 0) + 1;
+    }
   }
+
   return {
     total: rows.length,
     byTier,
+    byImpactKind,
+    crossTab,
     withRelevance: rows.filter((r) => r.ai_relevance_score !== null).length,
     withRationale: rows.filter((r) => (r.impact_rationale ?? "").trim()).length,
     relevanceInRange: rows.filter(
@@ -92,7 +127,50 @@ async function snapshot(
         r.ai_relevance_score >= 0 &&
         r.ai_relevance_score <= 100
     ).length,
+    neutralAtOrAbove40: rows.filter(
+      (r) => r.ai_sentiment === "Neutral" && (r.ai_relevance_score ?? -1) >= 40
+    ).length,
+    nonNeutralBelow20: rows.filter(
+      (r) =>
+        r.ai_sentiment !== null &&
+        r.ai_sentiment !== "Neutral" &&
+        (r.ai_relevance_score ?? 100) < 20
+    ).length,
+    stockPhrase: rows.filter((r) => STOCK_PHRASE.test(r.impact_rationale ?? ""))
+      .length,
   };
+}
+
+/**
+ * tier × relevance band.
+ *
+ * Printed because the tier distribution alone hid the real defect. Version 2
+ * produced a table that looked reasonable — 6.7% at the bottom, 74% Neutral,
+ * a spread across five grades — while underneath it every Neutral scored below
+ * 20 and everything non-Neutral scored above it. The two axes were one axis
+ * reported twice, and no amount of staring at a one-dimensional distribution
+ * would have said so.
+ */
+function printCrossTab(snap: Snapshot) {
+  const header = BANDS.map((b) => b.split(" ")[0].padStart(7)).join(" ");
+  console.log(`\n  tier × relevance band\n`);
+  console.log(`  ${"".padEnd(18)}${header}   total`);
+
+  for (const tier of SENTIMENT_TIERS) {
+    const row = snap.crossTab[tier] ?? {};
+    const cells = BANDS.map((b) => String(row[b] ?? 0).padStart(7)).join(" ");
+    const total = BANDS.reduce((n, b) => n + (row[b] ?? 0), 0);
+    console.log(`  ${tier.padEnd(18)}${cells}   ${String(total).padStart(5)}`);
+  }
+
+  const colTotals = BANDS.map((b) => {
+    const n = SENTIMENT_TIERS.reduce(
+      (acc, t) => acc + (snap.crossTab[t]?.[b] ?? 0),
+      0
+    );
+    return String(n).padStart(7);
+  }).join(" ");
+  console.log(`  ${"total".padEnd(18)}${colTotals}   ${String(snap.total).padStart(5)}`);
 }
 
 function printDistribution(label: string, snap: Snapshot) {
@@ -114,6 +192,11 @@ function printDistribution(label: string, snap: Snapshot) {
   console.log(
     `  with relevance ${snap.withRelevance}/${snap.total}, with rationale ${snap.withRationale}/${snap.total}`
   );
+}
+
+function printBefore(snap: Snapshot) {
+  printDistribution("BEFORE", snap);
+  printCrossTab(snap);
 }
 
 /**
@@ -166,7 +249,7 @@ async function main() {
   const client = createAdminClient();
 
   const before = await snapshot(client);
-  printDistribution("BEFORE", before);
+  printBefore(before);
 
   const rows = await loadTargets(client, limit);
 
@@ -243,8 +326,17 @@ async function main() {
   const after = await snapshot(client);
 
   printDistribution("AFTER", after);
+  printCrossTab(after);
 
-  console.log("\nRelevance bands:");
+  console.log("\nImpact kind (which limb of the test carried the article):");
+  for (const [kind, n] of Object.entries(after.byImpactKind).sort(
+    (a, b) => b[1] - a[1]
+  )) {
+    const pct = after.total ? ((100 * n) / after.total).toFixed(1) : "0.0";
+    console.log(`  ${kind.padEnd(14)} ${String(n).padStart(4)}  ${pct.padStart(5)}%`);
+  }
+
+  console.log("\nRelevance bands (this run):");
   for (const band of Object.keys(byBand).sort()) {
     console.log(`  ${band.padEnd(16)} ${byBand[band]}`);
   }
@@ -259,18 +351,77 @@ async function main() {
       ` (${(elapsedMs / 1000 / Math.max(1, processed)).toFixed(1)}s per article)`
   );
 
-  // The threshold from the brief: if the bottom tier is still above ~25% the
-  // prompt has not done its job, and that is a reason to iterate rather than
-  // to ship. Stated by the script so it is not a judgement call afterwards.
+  // -------------------------------------------------------------------------
+  // The bars. Both directions this time.
+  // -------------------------------------------------------------------------
+  //
+  // The previous brief set a ceiling on 'Very unfavourable' and nothing else,
+  // and the prompt duly satisfied it by pushing three quarters of the corpus
+  // into Neutral. A one-sided bar measures one failure mode and rewards its
+  // opposite. These four are checked together, and any of them can fail the
+  // run.
+  console.log("\nBARS");
+  const failures: string[] = [];
+
   const vu = after.byTier["Very unfavourable"] ?? 0;
   const vuPct = after.total ? (100 * vu) / after.total : 0;
+  const vuOk = vuPct <= 25;
+  if (!vuOk) {
+    failures.push(
+      `'Very unfavourable' at ${vuPct.toFixed(1)}% exceeds the 25% ceiling — the barbell is back.`
+    );
+  }
   console.log(
-    `\n'Very unfavourable' is ${vuPct.toFixed(1)}% — ${
-      vuPct > 25
-        ? "ABOVE the 25% bar: the prompt needs another pass."
-        : "within the 25% bar."
-    }`
+    `  ${vuOk ? "PASS" : "FAIL"}  'Very unfavourable' ${vuPct.toFixed(1)}%  (ceiling 25%)`
   );
+
+  const neutral = after.byTier["Neutral"] ?? 0;
+  const neutralPct = after.total ? (100 * neutral) / after.total : 0;
+  const neutralOk = neutralPct <= 55;
+  if (!neutralOk) {
+    failures.push(
+      `'Neutral' at ${neutralPct.toFixed(1)}% exceeds the 55% ceiling — the impact test is still swallowing news.`
+    );
+  }
+  console.log(
+    `  ${neutralOk ? "PASS" : "FAIL"}  'Neutral' ${neutralPct.toFixed(1)}%  (ceiling 55%)`
+  );
+
+  // Axis independence, tested from both corners. Either alone is satisfiable
+  // by accident; together they say the two fields are being decided
+  // separately.
+  const neutralHighOk = after.neutralAtOrAbove40 > 0;
+  if (!neutralHighOk) {
+    failures.push(
+      "No article is Neutral at relevance 40+. A material event with no honest direction is unrepresentable, so the axes are still fused."
+    );
+  }
+  console.log(
+    `  ${neutralHighOk ? "PASS" : "FAIL"}  Neutral at relevance 40+  ${after.neutralAtOrAbove40} article(s)`
+  );
+
+  // Reported rather than failed. "No article has a clear direction and a small
+  // effect" is a claim about this corpus, not necessarily about the scale —
+  // 275 articles from one fortnight may genuinely contain no such story. So it
+  // is printed loudly and left to the reader, which is what the brief asked
+  // for: report it rather than shipping past it.
+  console.log(
+    `  ${after.nonNeutralBelow20 > 0 ? "PASS" : "NOTE"}  non-Neutral below relevance 20  ${after.nonNeutralBelow20} article(s)` +
+      (after.nonNeutralBelow20 === 0
+        ? "\n        — none in this corpus. Either it contains no clearly-directional trivial\n          story, or the low band is still reserved for Neutral. Watch this."
+        : "")
+  );
+
+  const stockPct = after.total ? (100 * after.stockPhrase) / after.total : 0;
+  console.log(
+    `  ${after.stockPhrase === 0 ? "PASS" : "NOTE"}  stock-phrase rationales  ${after.stockPhrase} (${stockPct.toFixed(1)}%, was 98 / 36.6%)`
+  );
+
+  if (failures.length > 0) {
+    console.log("\nDO NOT SHIP:");
+    for (const f of failures) console.log(`  ${f}`);
+    process.exitCode = 1;
+  }
 
   // Completeness, checked rather than assumed. Every coded row must carry a
   // relevance score in range and a non-empty rationale — those two are what

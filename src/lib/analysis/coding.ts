@@ -37,11 +37,21 @@ const CODE_CONCURRENCY = 4;
  *      recoded then, 114 arrived afterwards under the same prompt but were
  *      never checked against it, and the sorting stall meant a further cohort
  *      had never been coded at all. Same scale, applied to everything, once.
+ *   3  the impact test gains a second limb. Version 2's test asked for a named
+ *      lane, port, service or cost, which measured the presence of a proper
+ *      noun rather than the presence of an impact — so market-wide news, which
+ *      names no single lane precisely because it moves all of them, graded
+ *      Neutral at relevance 15. It produced 74.3% Neutral and a relevance axis
+ *      perfectly correlated with the tier. Market-wide movements are now
+ *      impacts in their own right, with direction read from the movement;
+ *      relevance is anchored on the size of the effect rather than on whether
+ *      anything was named; and the prose-regex forcing function is replaced by
+ *      the impact_kind enum.
  *
  * Stored per article, which is what makes a recode resumable — see
  * migration 20260814000033 and scripts/recode.ts.
  */
-export const CODING_VERSION = 2;
+export const CODING_VERSION = 3;
 
 /** Body characters sent per article. */
 const MAX_BODY_CHARS = 8_000;
@@ -84,6 +94,104 @@ will not change a Nestlé transit time for two years is Neutral too: a benefit
 that is not yet real is not a benefit.`;
 
 /**
+ * THE IMPACT TEST, and why it needed a second limb.
+ *
+ * The previous version asked for a named lane, port, service or cost, on the
+ * reasoning that a grade with nothing concrete behind it is a grade with
+ * nothing behind it. That reasoning is sound and the rule still failed,
+ * because it measured the wrong thing: it measured whether a PROPER NOUN was
+ * present, and market-wide news names no single lane precisely BECAUSE it
+ * affects all of them.
+ *
+ * The result, measured on 268 rows: 199 Neutral (74.3%), 197 of them scored
+ * below relevance 20, and 98 rationales carried near-verbatim the same
+ * sentence — "The article names no specific Nestlé AOA lane, port, service or
+ * cost." Among the stories that sentence was applied to:
+ *
+ *   "Ocean freight market turns red hot, prompting freight rate rally"
+ *   "Ocean freight: early peak season pushes container rates higher"
+ *   "Asian port congestion forcing container lines back to the Red Sea"
+ *   "Europe's early container peak puts Q4 freight rates at risk"
+ *
+ * The last of those carried the figure "global schedule reliability fell from
+ * 64.5% in May to 62.6% in June" in its body and was still graded Neutral at
+ * relevance 15. A quantified deterioration in the reliability of every service
+ * Nestlé books was recorded as not mattering, because no berth was named.
+ *
+ * Rates rising across Asia-Europe names no one lane and matters more than most
+ * stories that do. So the test now has two limbs, and the second is stated as
+ * an equal rather than as a fallback — the model had been treating
+ * absence-of-a-proper-noun as absence-of-impact, and a limb introduced with
+ * "or, less strongly," would have been read the same way.
+ */
+const IMPACT_TEST = `An article names an impact when it identifies EITHER of these.
+They are equally valid. The second is NOT a weaker version of the first.
+
+  (a) SPECIFIC — a particular lane, port, terminal, carrier service, surcharge
+      or cost. "Berth waiting at Colombo up two days." "Maersk raises its
+      Middle East-Pakistan surcharge." "Durban terminal closed by strike."
+
+  (b) MARKET-WIDE — a movement in freight rates, vessel capacity, schedule
+      reliability, transit times, or routing, across trades Nestlé AOA
+      actually uses (Asia-Europe, Intra-Asia, Asia-Middle East, Asia-Africa,
+      Oceania, and the Suez / Red Sea / Cape of Good Hope corridors serving
+      them). "Spot rates rally on Asia-Europe." "Global schedule reliability
+      falls to 62.6%." "Carriers return to Red Sea routings." "Early peak
+      season pushes container rates higher."
+
+Limb (b) requires no proper noun and asking for one is an error. A market-wide
+movement affects every lane Nestlé books rather than one of them, which makes
+it broader in reach, not vaguer in substance. Do not write that an article
+names no specific lane as a reason to call it Neutral when it reports a
+market-wide movement — that observation is true and irrelevant.
+
+OUTLOOKS AND FORECASTS. An article framed as an outlook, a forecast, or "what
+shapes 2026" is not automatically speculation. Ask what it is built ON:
+
+  * Built on a condition ALREADY IN EFFECT — Red Sea diversions now running,
+    congestion now building, a rate trend now under way — the article is
+    reporting that live condition and you grade the condition. "Red Sea
+    disruption shapes the ocean freight outlook for 2026" reports that Red
+    Sea disruption is ongoing and consequential: market_wide, Unfavourable.
+  * Built on a condition that DOES NOT YET EXIST — a predicted recession, a
+    regulation not yet in force, an orderbook delivering in three years — that
+    is speculation and it is 'none'.
+
+The word "outlook" tells you the framing, not the substance. Read past it.
+
+An article fails BOTH limbs when it reports something that does not move
+freight at all: a crane delivery, a vendor product integration, a standards
+body membership, a fine or penalty on a carrier, corporate earnings, an
+appointment, an award, a funding round, a shipbuilding order, a technology
+pilot, a conference, or speculation about a year that has not started.`;
+
+/**
+ * Direction for market-wide movements, stated as a table.
+ *
+ * Spelled out because the model was reliably getting direction right for named
+ * events and reliably defaulting to Neutral for market ones — having no rule
+ * for which way a rate rise cuts, it declined to choose. Direction here is not
+ * a judgement call: a cost increase to a shipper is unfavourable to the
+ * shipper, whatever it does for the carrier's margins.
+ */
+const MARKET_DIRECTION = `  rates rising                            Unfavourable
+  rates falling                           Favourable
+  schedule reliability deteriorating      Unfavourable
+  schedule reliability improving          Favourable
+  congestion worsening at AOA ports       Unfavourable
+  congestion easing at AOA ports          Favourable
+  transit times lengthening               Unfavourable
+  transit times shortening                Favourable
+  capacity withdrawn from a trade         Unfavourable
+  capacity added to a trade               Favourable
+  routing forced onto a longer corridor   Unfavourable
+  routing restored to a shorter corridor  Favourable
+
+Read the direction from what MOVES, not from the tone of the coverage. A rate
+rally is cheerful news for carriers and reported as such; it is a cost increase
+to Nestlé and therefore Unfavourable.`;
+
+/**
  * The anchored five-point scale.
  *
  * Every anchor is a real article from this corpus, which matters: an abstract
@@ -96,34 +204,61 @@ that is not yet real is not a benefit.`;
  * not qualify — the point is not that they are unimportant news, but that they
  * name no Nestlé lane.
  */
-const GRADE_ANCHORS = `Very unfavourable — a primary AOA lane is severely
-  disrupted, right now.
+const GRADE_ANCHORS = `Very unfavourable — a trade Nestlé AOA uses is severely
+  disrupted, at scale, now.
     "Typhoon Dolphin Deepens China Port Congestion, Stranding 2.4M TEUs"
     "US forces strike containership Vela Nova in Gulf of Oman"
 
-Unfavourable — a real, bounded cost or delay on a lane Nestlé uses.
-    "Maersk raises Middle East-Pakistan surcharge"
-    A named AOA port adding two days of berth waiting time.
+Unfavourable — a real cost, delay or reliability loss on those trades. Specific
+  or market-wide; both belong here.
+    "Maersk raises Middle East-Pakistan surcharge"          (specific)
+    A named AOA port adding two days of berth waiting time. (specific)
+    "Ocean freight: early peak season pushes container rates higher"
+                                                            (market-wide)
+    "Container shipping reliability slips as port congestion takes its toll"
+                                                            (market-wide)
+    "Asian port congestion forcing container lines back to the Red Sea"
+                                                            (market-wide)
 
-Neutral — no identifiable effect on Nestlé's AOA container movement. THIS IS
-  THE DEFAULT AND MOST TRADE PRESS BELONGS HERE.
+Neutral — the article does not move Nestlé's freight in EITHER direction.
+  Two quite different things land here, and only the first is the common one:
+
+  (i) it fails both limbs of the impact test. Most trade press is this.
     "MSC fined $6 million over Charleston vessel incident"
-      — a penalty on a carrier, in a US port, with no AOA lane consequence.
+      — a penalty on a carrier, in a US port, with no AOA consequence.
     "PSA Antwerp adds new STS crane at Noordzee Terminal"
       — a single crane, in Europe, changing no transit time.
     "T-Mining joins DCSA+ to advance Secure Container Release standards"
       — an industry standards programme, years from any operational effect.
     "WaveBL integrates with Evergreen to expand electronic Bill of Lading
      adoption" — a documentation product integration.
-    Market commentary, sentiment surveys, appointments, awards, funding rounds,
-    corporate results, technology pilots and conference announcements.
+    Appointments, awards, funding rounds, corporate results, shipbuilding
+    orders, technology pilots, conference announcements, and forecasts about
+    conditions that do not yet exist. An outlook built on a disruption
+    already running is NOT one of these — see the impact test.
 
-Favourable — a real, bounded improvement on a lane Nestlé uses.
-    Congestion easing at a named AOA port.
-    A carrier restoring a suspended AOA service.
+  (ii) it names a real, material effect that genuinely cuts BOTH WAYS, so no
+    direction can honestly be assigned. This is uncommon but it is not empty,
+    and such an article is Neutral with a HIGH relevance score — the direction
+    is unresolved, the stakes are not.
+    "Regulators open in-depth probe into carrier merger covering 12% of
+     Asia-Europe capacity" — consolidation on a trade Nestlé uses would lift
+     rates if cleared and leave the current network in place if blocked; both
+     outcomes are live and material. Neutral, relevance 60.
+    A strike ballot at a major AOA port before any vote is taken.
+    A tariff proposal published for consultation, with no effective date.
 
-Very favourable — a primary AOA lane materially improves, at scale.
-    "Red Sea transits resuming at scale"`;
+Favourable — a real cost, delay or reliability improvement on those trades.
+    Congestion easing at a named AOA port.                  (specific)
+    A carrier restoring a suspended AOA service.            (specific)
+    "Spot rates fall as Asia-Europe capacity returns"       (market-wide)
+
+Very favourable — a trade Nestlé AOA uses materially improves, at scale.
+    "Red Sea transits resuming at scale"
+
+Neutral is the default for (i) and must NEVER be reached by way of "no single
+lane is named". If the article reports a market-wide movement, grade the
+movement.`;
 
 /**
  * Anchors for the magnitude axis.
@@ -133,18 +268,27 @@ Very favourable — a primary AOA lane materially improves, at scale.
  * collapsed the old distribution into a barbell: with nowhere to say "bad but
  * trivial", every piece of bad news reached for the bottom of the scale.
  */
-const RELEVANCE_ANCHORS = `  0-19   No identifiable effect on Nestlé AOA container movement.
-         A crane, a fine, a standards body, an award, a market survey.
-         If impact_rationale cannot name a lane, port, service or cost,
-         the score BELONGS HERE and the grade is Neutral.
-  20-39  Indirect or distant. Affects the industry or a region Nestlé uses,
-         with no measurable consequence for a Nestlé shipment.
-  40-59  Touches a lane Nestlé uses, with a modest or uncertain effect.
-  60-79  Material and measurable: a real cost, delay or capacity change on a
-         named AOA lane.
-  80-100 Severe: a primary AOA lane disrupted or transformed at scale.
-         Reserve 90+ for events measured in millions of TEUs, closed
-         corridors, or region-wide capacity loss.`;
+const RELEVANCE_ANCHORS = `  80-100 A trade Nestlé AOA uses is disrupted RIGHT NOW, at scale.
+         Millions of TEUs held, a corridor closed, region-wide capacity loss.
+  60-79  A material cost or reliability change on those trades. A rate rally
+         across a Nestlé trade. Global schedule reliability moving several
+         points. A surcharge on a lane Nestlé books. A major carrier merger
+         under regulatory challenge on an Asia-Europe trade.
+  40-59  A real but bounded effect, OR a strong signal about the near term.
+         An early peak season pushing rates. Congestion building at one AOA
+         port. A capacity change on one string.
+  20-39  Industry context that informs planning without changing it.
+         Orderbook totals, a forecast about conditions not yet in effect, a
+         regulation years from effect, a survey of carrier sentiment.
+  0-19   No bearing on moving Nestlé's containers. A crane, a fine, an
+         appointment, an award, a vendor integration, a standards body.
+
+Score the SIZE of the effect, not whether a proper noun appeared. "Spot rates
+across Asia-Europe rally 30%" names no lane and is a 60-79; "Antwerp takes
+delivery of a crane" names two proper nouns and is a 0-19.
+
+Reserve 90+ for events measured in millions of TEUs, closed corridors, or
+region-wide capacity loss.`;
 
 function buildSystemPrompt(themes: ThemeOption[]): string {
   const catalogue = themes
@@ -152,8 +296,8 @@ function buildSystemPrompt(themes: ThemeOption[]): string {
     .join("\n");
 
   return `You are coding ocean-freight news articles for Nestlé's supply chain
-media intelligence. You do four things, IN THIS ORDER: assign themes, name the
-impact, grade it, and write a summary.
+media intelligence. You do five things, IN THIS ORDER: assign themes, name the
+impact, classify what kind of impact it is, grade it, and write a summary.
 
 THEMES. Assign 1-3 themes from the fixed list below, most important first.
 
@@ -170,15 +314,39 @@ IMPACT RATIONALE. One sentence. Write this BEFORE you grade, and grade from it.
 
 Everything below is judged against ${SUBJECT}
 
-Name the SPECIFIC thing that changes for Nestlé: the lane, the port, the
-carrier service, the corridor, or the cost. Be concrete — "Asia-Europe transits
-via Suez", "berth waiting at Colombo", "Far East to West Africa capacity".
+${IMPACT_TEST}
 
-If you cannot name one, say so plainly — write that the article names no
-Nestlé AOA lane, port, service or cost. That is a legitimate and COMMON answer.
-When it is the answer, favourability MUST be Neutral and relevance MUST be
-below 20. Do not manufacture an impact to justify a grade; the sentence is
-evidence for the grade, not decoration on it.
+Write what the article says MOVES. Name the thing and, where the article gives
+one, the number: "spot rates on Asia-Europe rallying ahead of an early peak",
+"global schedule reliability down from 64.5% to 62.6%", "berth waiting at
+Colombo up two days", "carriers returning to Red Sea routings".
+
+This applies EVEN WHEN THE ANSWER IS NEUTRAL. "No impact" on its own is not a
+rationale — it describes your conclusion instead of the evidence for it. Write
+what the article reports and why that does not move Nestlé's freight:
+
+  BAD   "The article names no specific Nestlé AOA lane, port, service or cost."
+  GOOD  "Reports a crane delivery at PSA Antwerp, changing no AOA service."
+  GOOD  "Reports MSC's $6m US penalty, which alters no AOA rate or routing."
+  BAD   "No identifiable effect on Nestlé AOA container movement."
+  GOOD  "Reports Q3 earnings at Hapag-Lloyd, with no rate or capacity change."
+
+Do not manufacture an impact to justify a grade, and do not reach for a stock
+phrase to avoid one. The sentence is evidence for the grade, not decoration
+on it.
+
+IMPACT KIND. Classify the rationale you just wrote, as one of:
+
+  specific     limb (a) — a named lane, port, terminal, service, surcharge, cost
+  market_wide  limb (b) — a movement in rates, capacity, reliability, transit
+               times or routing across trades Nestlé AOA uses
+  none         neither limb — the article does not move Nestlé's freight
+
+Choose 'none' only when the article genuinely fails BOTH limbs. A story about
+rates, capacity, reliability, transit times or routing on Nestlé's trades is
+'market_wide' even though it names no single lane. Getting this wrong is the
+single most consequential error available to you: 'none' forces the grade to
+Neutral and the score below 20.
 
 FAVOURABILITY — direction only. Which way does it move Nestlé's AOA container
 movement? Magnitude is a separate field; do not let a big number pull the
@@ -186,13 +354,27 @@ direction, or a strong direction inflate the number.
 
 ${GRADE_ANCHORS}
 
+For a market_wide impact, direction follows from the movement:
+
+${MARKET_DIRECTION}
+
 RELEVANCE — magnitude, 0-100. How much does this matter to Nestlé AOA?
 
 ${RELEVANCE_ANCHORS}
 
-Direction and magnitude are independent. A carrier's $6m fine is Neutral and 5.
-A typhoon stranding 2.4M TEUs is Very unfavourable and 95. Both are "bad news"
-in tone; they are nothing alike in what they mean for Nestlé.
+DIRECTION AND MAGNITUDE ARE INDEPENDENT AXES. Decide them separately.
+
+  * A carrier's $6m US fine is Neutral and 5. No direction, no size.
+  * A typhoon stranding 2.4M TEUs is Very unfavourable and 95.
+  * A merger probe on 12% of Asia-Europe capacity is Neutral and 60 — the
+    stakes are large, the direction is genuinely unresolved.
+  * A minor surcharge on one small string is Unfavourable and 30 — the
+    direction is clear, the size is small.
+
+The last two are the ones to watch. Neutral does not mean unimportant, and a
+clear direction does not mean large. If every Neutral you assign scores under
+20 and everything you score over 40 has a direction, you are reading one axis
+off the other and reporting it twice.
 
 SUMMARY. Write 2-3 sentences a newsletter curator can paste in unedited.
 
@@ -230,6 +412,11 @@ function buildSchema(themes: ThemeOption[]): JsonSchema {
       // than rationalised afterwards. Reverse these two and the forcing
       // function stops forcing anything.
       impact_rationale: { type: "STRING" },
+      // Between the rationale and the grade, in that order for a reason. The
+      // model states the evidence, classifies it against the two-limb test,
+      // and only then grades — so the classification is derived from the
+      // sentence rather than the sentence being written to fit it.
+      impact_kind: { type: "STRING", enum: [...IMPACT_KINDS] },
       favourability: { type: "STRING", enum: [...SENTIMENT_TIERS] },
       relevance: { type: "INTEGER", minimum: 0, maximum: 100 },
       summary: { type: "STRING" },
@@ -237,6 +424,7 @@ function buildSchema(themes: ThemeOption[]): JsonSchema {
     required: [
       "themes",
       "impact_rationale",
+      "impact_kind",
       "favourability",
       "relevance",
       "summary",
@@ -244,6 +432,7 @@ function buildSchema(themes: ThemeOption[]): JsonSchema {
     propertyOrdering: [
       "themes",
       "impact_rationale",
+      "impact_kind",
       "favourability",
       "relevance",
       "summary",
@@ -310,19 +499,48 @@ function asRelevance(value: unknown): number {
 }
 
 /**
- * The consistency rule from the prompt, enforced in code rather than trusted.
+ * Which limb of the impact test the article satisfies.
  *
- * "No nameable impact" is the single most common correct answer, and it is
- * also the one the model is most tempted to grade around — an upbeat crane
- * story reads as good news, and the pull towards 'Favourable' is exactly what
- * produced 'Very favourable' cranes in the first place. If the rationale says
- * there is no lane impact, the grade is Neutral and the score is capped,
- * whatever the model returned.
+ * WHY THIS REPLACED A REGEX. The consistency rule used to be enforced by
+ * pattern-matching the rationale prose:
+ *
+ *   /\b(no|not|does not|...)\b[^.]*\b(identifiable|specific|direct|nestl|aoa|
+ *     lane|impact|effect|bearing|consequence)/i
+ *
+ * It was built to stop an upbeat crane story climbing the scale, and it did.
+ * It also did far more than that, in two ways that only became visible at 268
+ * rows.
+ *
+ * First, it rewarded a stock phrase. The surest way to satisfy the prompt's
+ * "say so plainly" instruction was to write "the article names no specific
+ * Nestlé AOA lane, port, service or cost", and 98 of 268 rationales did,
+ * near-verbatim. Once a sentence is that reliable it stops being reasoning and
+ * becomes a token the model reaches for.
+ *
+ * Second — and this is what made it dangerous under the new two-limb test — it
+ * matched an OBSERVATION, not a CONCLUSION. "Spot rates are rallying across
+ * Asia-Europe, though no single lane is named" is a perfectly correct
+ * Unfavourable rationale, and that regex would have caught the trailing clause
+ * and forced it to Neutral/19. Widening the impact test while keeping the
+ * regex would have produced correct grades silently overwritten on their way
+ * to the database.
+ *
+ * An enum cannot be reached for by accident and cannot be triggered by a
+ * subordinate clause. The model has to commit to a classification, that
+ * classification is stored, and the forcing rule reads it rather than guessing
+ * at English.
  */
-const NO_IMPACT = /\b(no|not|does not|doesn't|cannot|can't|none)\b[^.]*\b(identifiable|specific|direct|nestl|aoa|lane|impact|effect|bearing|consequence)/i;
+export const IMPACT_KINDS = ["specific", "market_wide", "none"] as const;
 
-export function looksLikeNoImpact(rationale: string): boolean {
-  return NO_IMPACT.test(rationale);
+export type ImpactKind = (typeof IMPACT_KINDS)[number];
+
+const IMPACT_KIND_SET: ReadonlySet<string> = new Set(IMPACT_KINDS);
+
+function asImpactKind(value: unknown): ImpactKind {
+  if (typeof value === "string" && IMPACT_KIND_SET.has(value)) {
+    return value as ImpactKind;
+  }
+  throw new Error(`Coding response had an invalid impact_kind: ${String(value)}`);
 }
 
 /**
@@ -373,6 +591,7 @@ export type CodingResult = {
   tier: SentimentTier;
   relevance: number;
   impactRationale: string;
+  impactKind: ImpactKind;
   themes: string[];
   summary: string;
 };
@@ -380,6 +599,7 @@ export type CodingResult = {
 type CodingResponse = {
   themes?: unknown;
   impact_rationale?: unknown;
+  impact_kind?: unknown;
   favourability?: unknown;
   relevance?: unknown;
   summary?: unknown;
@@ -422,18 +642,35 @@ export async function codeArticle(
     throw new Error("Coding response returned an empty impact_rationale.");
   }
 
+  const impactKind = asImpactKind(raw.impact_kind);
   let tier = asTier(raw.favourability);
   let relevance = asRelevance(raw.relevance);
 
-  // Enforce the no-impact rule rather than trusting it. See looksLikeNoImpact.
-  if (looksLikeNoImpact(impactRationale)) {
+  // The one hard rule left. 'none' means the article fails both limbs of the
+  // impact test, and an article that moves nothing cannot have a direction or
+  // a magnitude. Kept because it is what stops an upbeat crane story climbing
+  // the scale — the original failure this file was written to fix.
+  //
+  // Note what is NOT forced. A 'specific' or 'market_wide' article is free to
+  // be Neutral (a two-sided event) and free to score low (a small effect).
+  // Adding rules there would re-fuse the axes from the other direction, which
+  // is how the last correction over-corrected.
+  if (impactKind === "none") {
     if (tier !== "Neutral" || relevance >= 20) {
       console.warn(
-        `[coding] rationale names no impact but graded ${tier}/${relevance}; forcing Neutral/<20 — "${impactRationale.slice(0, 120)}"`
+        `[coding] impact_kind=none but graded ${tier}/${relevance}; forcing Neutral/<20 — "${impactRationale.slice(0, 120)}"`
       );
     }
     tier = "Neutral";
     relevance = Math.min(relevance, 19);
+  } else if (relevance < 20) {
+    // Warned, never corrected. An article that moves rates on a Nestlé trade
+    // and scores 12 is probably a misclassification, but "probably" is not
+    // grounds for overwriting a judgement — and a silent correction here would
+    // hide exactly the calibration signal this warning exists to surface.
+    console.warn(
+      `[coding] impact_kind=${impactKind} but relevance ${relevance} (<20, the "no bearing" band) — "${impactRationale.slice(0, 120)}"`
+    );
   }
 
   // Belt and braces over the schema enum. The API enforces the vocabulary
@@ -464,7 +701,14 @@ export async function codeArticle(
   const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
   if (!summary) throw new Error("Coding response returned an empty summary.");
 
-  return { tier, relevance, impactRationale, themes: accepted, summary };
+  return {
+    tier,
+    relevance,
+    impactRationale,
+    impactKind,
+    themes: accepted,
+    summary,
+  };
 }
 
 export type CodingBatchSummary = {
@@ -476,6 +720,25 @@ export type CodingBatchSummary = {
   byTheme: Record<string, number>;
   /** Relevance banded, so a run shows its magnitude spread not just its direction. */
   byRelevanceBand: Record<string, number>;
+  /**
+   * Which limb of the impact test carried each article.
+   *
+   * Reported because the two-limb test is the change being trusted here, and
+   * a rule nobody can count is a rule nobody can check. If market_wide comes
+   * back near zero, the second limb is being ignored and the corpus is back
+   * where it started — with the difference that this number says so.
+   */
+  byImpactKind: Record<string, number>;
+  /**
+   * tier → relevance band → count.
+   *
+   * The tier table alone hid the real defect last time: it showed a plausible
+   * spread of grades while every Neutral sat under 20 and everything else sat
+   * over 20, so relevance was being read off the tier rather than measured.
+   * A cross-tabulation makes that visible in the shape of the table instead of
+   * requiring someone to think to ask.
+   */
+  crossTab: Record<string, Record<string, number>>;
   errors: { articleId: string; error: string }[];
 };
 
@@ -548,6 +811,8 @@ export function emptyCodingSummary(): CodingBatchSummary {
     byTier: {},
     byTheme: {},
     byRelevanceBand: {},
+    byImpactKind: {},
+    crossTab: {},
     errors: [],
   };
 }
@@ -597,6 +862,7 @@ export async function codeArticles(
         ai_sentiment: result.tier,
         ai_relevance_score: result.relevance,
         impact_rationale: result.impactRationale,
+        impact_kind: result.impactKind,
         ai_themes: result.themes,
         ai_summary: result.summary,
         coded_status: "coded",
@@ -627,6 +893,10 @@ export async function codeArticles(
     summary.byTier[tier] = (summary.byTier[tier] ?? 0) + 1;
     const band = relevanceBand(outcome.result.relevance);
     summary.byRelevanceBand[band] = (summary.byRelevanceBand[band] ?? 0) + 1;
+    const kind = outcome.result.impactKind;
+    summary.byImpactKind[kind] = (summary.byImpactKind[kind] ?? 0) + 1;
+    summary.crossTab[tier] ??= {};
+    summary.crossTab[tier][band] = (summary.crossTab[tier][band] ?? 0) + 1;
     for (const theme of outcome.result.themes) {
       summary.byTheme[theme] = (summary.byTheme[theme] ?? 0) + 1;
     }

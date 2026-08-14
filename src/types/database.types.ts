@@ -63,6 +63,7 @@ export type Database = {
           dedup_key: string
           headline: string
           id: string
+          impact_kind: string | null
           impact_rationale: string | null
           ingested_at: string
           keyword_mention_count: number | null
@@ -97,6 +98,7 @@ export type Database = {
           dedup_key: string
           headline: string
           id?: string
+          impact_kind?: string | null
           impact_rationale?: string | null
           ingested_at?: string
           keyword_mention_count?: number | null
@@ -131,6 +133,7 @@ export type Database = {
           dedup_key?: string
           headline?: string
           id?: string
+          impact_kind?: string | null
           impact_rationale?: string | null
           ingested_at?: string
           keyword_mention_count?: number | null
