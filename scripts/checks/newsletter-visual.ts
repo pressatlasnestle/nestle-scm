@@ -2,8 +2,11 @@
  * Builds standalone pages that render the REAL newsletter components against
  * REAL press data, so they can be looked at.
  *
- *   npx tsx --env-file=.env.local scripts/checks/newsletter-visual.ts [YYYY-MM]
+ *   npx tsx --env-file=.env.local scripts/checks/newsletter-visual.ts [YYYY-MM-DD]
  *   → three plain file:// pages; no auth, no dev server, no Next.js
+ *
+ * The argument is any day inside the week to render; it is snapped to that
+ * week's Monday.
  *
  * WHY THIS EXISTS.
  *
@@ -25,7 +28,7 @@
  *                      columns can be read at full length rather than as the
  *                      empty boxes a fresh edition shows
  *
- * The press section uses REAL coded articles for the month, because the thing
+ * The press section uses REAL coded articles for the week, because the thing
  * most likely to break the layout is a real headline: they run long, they carry
  * punctuation, and no invented fixture is as hostile as the corpus. The
  * OPERATIONAL figures are invented and obviously rounded — they must never be
@@ -37,7 +40,8 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createAdminClient } from "../../src/lib/supabase/admin";
-import { monthFromIso, previousMonth } from "../../src/lib/newsletter/month";
+import { weekContainingDate } from "../../src/lib/analysis/week-period";
+import { previousWeek, weekRangeLabel } from "../../src/lib/newsletter/week";
 import {
   buildGenerated,
   sectionStates,
@@ -58,6 +62,12 @@ const PRESS_SELECT = "id, headline, ai_summary, url, media, published_at, ai_the
 
 const STAMP = { entered_at: new Date(0).toISOString(), entered_by: null };
 
+/** Nth day of a week, 0 = Monday. */
+function dayOfWeek(weekStart: string, offset: number): string {
+  const d = new Date(`${weekStart}T00:00:00Z`);
+  return new Date(d.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
+}
+
 /**
  * Authored text at realistic length.
  *
@@ -66,11 +76,11 @@ const STAMP = { entered_at: new Date(0).toISOString(), entered_by: null };
  */
 const AUTHORED: Authored = {
   headlineRead:
-    "HARNESS COPY, NOT A REAL EDITION. Congestion eased across North Asia through the month while the Gulf remained the binding constraint on our westbound lanes. The practical effect for us is narrow: transit variance, not capacity, is what moved.\n\nNothing this month changes the standing booking posture. The watch list below is where the risk actually sits.",
+    "HARNESS COPY, NOT A REAL EDITION. Congestion eased across North Asia through the week while the Gulf remained the binding constraint on our westbound lanes. The practical effect for us is narrow: transit variance, not capacity, is what moved.\n\nNothing this week changes the standing booking posture. The watch list below is where the risk actually sits.",
   regionalCommentary:
     "HARNESS COPY. North Asia carried the largest absolute reduction, though from the highest base, and the improvement is concentrated in the two ports we do not use heavily. SE Asia is flat within noise. Nothing in the regional picture argues for re-routing.",
   reliabilityNote:
-    "HARNESS COPY. Reliability improved a little on the headline number, but the average delay on late arrivals did not, which is the figure that actually sets our buffer. Read the two together before drawing a conclusion from the first alone.",
+    "HARNESS COPY. Reliability improved a little on the headline number, but the average delay on late arrivals did not, which is the figure that actually sets our buffer. This is a monthly figure and will read the same for the next three editions — read it against the month, not against last week.",
   watchList: [
     {
       risk: "Red Sea routing stays committed to the Cape, keeping Asia–Europe transit at the longer profile",
@@ -98,10 +108,10 @@ const AUTHORED: Authored = {
  * The queue/berth ratios still disagree with their ship counts, because that
  * disagreement is the thing the port table must render faithfully.
  */
-function operationalFixtures(monthStart: string, priorStart: string) {
-  const latest = `${monthStart.slice(0, 7)}-24`;
-  const earlier = `${monthStart.slice(0, 7)}-11`;
-  const priorLatest = `${priorStart.slice(0, 7)}-27`;
+function operationalFixtures(weekStart: string, priorStart: string) {
+  const latest = dayOfWeek(weekStart, 4); // Friday
+  const earlier = dayOfWeek(weekStart, 1); // Tuesday
+  const priorLatest = dayOfWeek(priorStart, 4);
 
   const congestion: CongestionRow[] = [
     {
@@ -188,12 +198,22 @@ function operationalFixtures(monthStart: string, priorStart: string) {
     portRow(priorLatest, "Gibraltar (Algeciras/Tanger Med)", 18, 8, 150_000, 2.3),
     portRow(priorLatest, "Singapore", 40, 30, 300_000, 1.3),
     // Busan has no prior row on purpose, so one line of the table has to render
-    // an absence rather than a number.
+    // an absence — the longest string the delta column ever holds, and the one
+    // that broke the 375px layout last round.
     portRow(priorLatest, "LA/LB", 11, 14, 75_000, 0.8),
   ];
 
+  // Monthly, and carried forward into a weekly edition — the case the
+  // reliability caption exists for.
+  const monthOfWeek = `${weekStart.slice(0, 7)}-01`;
+  const priorMonth = `${
+    Number(weekStart.slice(5, 7)) === 1
+      ? `${Number(weekStart.slice(0, 4)) - 1}-12`
+      : `${weekStart.slice(0, 4)}-${String(Number(weekStart.slice(5, 7)) - 1).padStart(2, "0")}`
+  }-01`;
+
   const reliability: ScheduleReliabilityRow = {
-    month_of: monthStart,
+    month_of: priorMonth,
     glp_issue_number: 100,
     global_reliability_pct: 65,
     avg_delay_days: 4.5,
@@ -206,7 +226,11 @@ function operationalFixtures(monthStart: string, priorStart: string) {
     ...STAMP,
   };
   const priorReliability: ScheduleReliabilityRow = {
-    month_of: priorStart,
+    month_of: `${
+      Number(priorMonth.slice(5, 7)) === 1
+        ? `${Number(priorMonth.slice(0, 4)) - 1}-12`
+        : `${priorMonth.slice(0, 4)}-${String(Number(priorMonth.slice(5, 7)) - 1).padStart(2, "0")}`
+    }-01`,
     glp_issue_number: 99,
     global_reliability_pct: 62,
     avg_delay_days: 4.9,
@@ -218,6 +242,7 @@ function operationalFixtures(monthStart: string, priorStart: string) {
     },
     ...STAMP,
   };
+  void monthOfWeek;
 
   return { congestion, priorCongestion, fleet, priorFleet, ports, priorPorts, reliability, priorReliability };
 }
@@ -226,9 +251,8 @@ async function main() {
   const outDir = process.env.HARNESS_OUT ?? join(process.cwd(), ".harness", "newsletter");
   mkdirSync(outDir, { recursive: true });
 
-  const monthArg = process.argv[2] ?? "2026-08";
-  const month = monthFromIso(`${monthArg}-01`);
-  const prior = previousMonth(month);
+  const week = weekContainingDate(process.argv[2] ?? "2026-08-10");
+  const prior = previousWeek(week);
 
   const client = createAdminClient();
   const { data, error } = await client
@@ -237,8 +261,8 @@ async function main() {
     .eq("status", "active")
     .eq("coded_status", "coded")
     .not("published_at", "is", null)
-    .gte("published_at", month.start)
-    .lte("published_at", month.end)
+    .gte("published_at", week.start)
+    .lte("published_at", week.end)
     .order("published_at", { ascending: false })
     .limit(2000);
   if (error) throw new Error(error.message);
@@ -246,8 +270,8 @@ async function main() {
   const press = (data ?? []) as PressCandidate[];
 
   const input: EditionInput = {
-    month,
-    ...operationalFixtures(month.start, prior.start),
+    week,
+    ...operationalFixtures(week.start, prior.start),
     press,
     includedArticleIds: null,
     hasHistoryBefore: true,
@@ -262,7 +286,7 @@ async function main() {
   const html = renderEditionHtml(edition, { baseUrl: "https://nestle-scm.vercel.app" });
 
   console.log(
-    `${month.label}: ${press.length} coded articles, ${generated.press.themes.length} themes, ` +
+    `${weekRangeLabel(week)}: ${press.length} coded articles, ${generated.press.themes.length} themes, ` +
       `${generated.press.shown} shown, ${generated.glance.length} glance rows, ` +
       `${generated.ports.length} ports, ${generated.regions.length} regions`
   );
@@ -279,7 +303,7 @@ async function main() {
   // srcdoc rather than src="./email.html", so the page is self-contained and
   // opens straight off the filesystem. An iframe with a relative src needs an
   // http origin to resolve against; served as a file it renders two empty grey
-  // rectangles, which looks exactly like a layout bug and is not one.
+  // rectangles, which looks exactly like a layout bug and is not.
   const srcdoc = html.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 
   writeFileSync(
@@ -294,8 +318,8 @@ async function main() {
   .cap { font-family:"Cascadia Mono",Consolas,monospace; font-size:11px; color:#2fd9c7; padding:0 0 6px; }
   iframe { border:1px solid #223252; border-radius:8px; background:#eef2f7; height:1400px; display:block; }
 </style></head><body>
-<h1>${subjectLine(month)}</h1>
-<p>Left: the 640px design width. Right: 375px, where a table-based layout actually breaks — check that no column is clipped, no figure wraps mid-number, and the page itself never scrolls sideways.</p>
+<h1>${subjectLine(week)}</h1>
+<p>Left: the 640px design width. Right: 375px, where a table-based layout actually breaks — check that no column is clipped, no figure wraps mid-number, and the page itself never scrolls sideways. The header now carries a date range rather than a month name, which is more than twice as wide.</p>
 <div class="row">
   <div class="col"><div class="cap">640px &middot; desktop</div><iframe width="640" srcdoc="${srcdoc}"></iframe></div>
   <div class="col"><div class="cap">375px &middot; phone</div><iframe width="375" srcdoc="${srcdoc}"></iframe></div>
@@ -306,7 +330,11 @@ async function main() {
   // --- 3. The composer -----------------------------------------------------
   writeFileSync(
     join(outDir, "data.json"),
-    JSON.stringify({ month, input, authored: AUTHORED, baseUrl: "https://nestle-scm.vercel.app" }, null, 2)
+    JSON.stringify(
+      { week, input, authored: AUTHORED, baseUrl: "https://nestle-scm.vercel.app" },
+      null,
+      2
+    )
   );
 
   writeFileSync(
@@ -314,24 +342,34 @@ async function main() {
     `import { createRoot } from "react-dom/client";
 import { NewsletterComposer } from "@/app/(admin)/newsletter/NewsletterComposer";
 import { ToastProvider } from "@/components/Toast";
-import { recentMonths } from "@/lib/newsletter/month";
+import { recentEditionWeeks } from "@/lib/newsletter/week";
 import data from "./data.json";
 
 const d = data as any;
+
+const weeks = [d.week, ...recentEditionWeeks(new Date("2026-08-17"), 8)].filter(
+  (w, i, all) => all.findIndex((x) => x.start === w.start) === i
+);
+
+// Representative counts, including a deliberately thin week, so the selector's
+// reason for existing is visible in the harness.
+const weekCounts: Record<string, number> = {};
+weeks.forEach((w, i) => {
+  weekCounts[w.start] = i === 0 ? d.input.press.length : Math.max(0, 12 - i * 2);
+});
 
 createRoot(document.getElementById("root")!).render(
   <ToastProvider>
     <div className="content">
       <NewsletterComposer
-        month={d.month}
-        months={[d.month, ...recentMonths(new Date("2026-08-14"), 6)].filter(
-          (m, i, all) => all.findIndex((x) => x.start === m.start) === i
-        )}
-        editions={[{ monthStart: d.month.start, status: "draft", sentAt: null }]}
+        week={d.week}
+        weeks={weeks}
+        weekCounts={weekCounts}
+        editions={[{ weekStart: d.week.start, status: "draft", sentAt: null }]}
         status="draft"
         exists
         sentAt={null}
-        savedAt={"2026-08-14T09:00:00.000Z"}
+        savedAt={"2026-08-17T09:00:00.000Z"}
         authored={d.authored}
         includedArticleIds={null}
         input={d.input}
@@ -354,7 +392,7 @@ createRoot(document.getElementById("root")!).render(
    * actions.ts is "use server" and cannot be bundled at all; next/navigation's
    * hooks need a Next router in context. Both are aliased to inert versions so
    * the REAL composer renders with the REAL data shapes — only Save, Send and
-   * the month selector are dead, and those are covered by check:newsletter.
+   * the week selector are dead, and those are covered by check:newsletter.
    */
   writeFileSync(
     join(outDir, "action-stub.ts"),

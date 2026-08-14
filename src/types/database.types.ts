@@ -358,7 +358,7 @@ export type Database = {
           headline_read: string | null
           id: string
           included_article_ids: string[] | null
-          month_of: string
+          week_of: string
           recommended_actions: Json | null
           regional_commentary: string | null
           reliability_note: string | null
@@ -374,7 +374,7 @@ export type Database = {
           headline_read?: string | null
           id?: string
           included_article_ids?: string[] | null
-          month_of: string
+          week_of: string
           recommended_actions?: Json | null
           regional_commentary?: string | null
           reliability_note?: string | null
@@ -390,7 +390,7 @@ export type Database = {
           headline_read?: string | null
           id?: string
           included_article_ids?: string[] | null
-          month_of?: string
+          week_of?: string
           recommended_actions?: Json | null
           regional_commentary?: string | null
           reliability_note?: string | null

@@ -8,15 +8,15 @@ import {
   PRESS_ITEMS_PER_THEME,
   type PressCandidate,
 } from "@/lib/newsletter/press";
-import { dayLabel } from "@/lib/newsletter/month";
+import { dayLabel } from "@/lib/newsletter/week";
 
 /**
  * The press section's toggles.
  *
- * Shows EVERY candidate the month produced, grouped exactly as the edition
+ * Shows EVERY candidate the week produced, grouped exactly as the edition
  * groups them, with three visible states: in the edition, toggled out, and held
  * back by the per-theme cap. A picker that showed only what will be sent would
- * make a cap and an empty month look the same, and would make an exclusion
+ * make a cap and a quiet week look the same, and would make an exclusion
  * indistinguishable from an article that was never captured.
  *
  * The cap applies AFTER exclusions, so toggling one of the five out promotes
@@ -74,7 +74,7 @@ export function PressPicker({
   if (candidates.length === 0) {
     return (
       <div className="press-empty">
-        No article published in this month is both active and coded, so there is
+        No article published in this week is both active and coded, so there is
         no press section to compose. The section will be left out of the edition
         entirely rather than sent as an empty heading.
       </div>
@@ -102,7 +102,7 @@ export function PressPicker({
             <span>{group.theme}</span>
             <span className="press-theme-count">
               {group.periodCount} article{group.periodCount === 1 ? "" : "s"}{" "}
-              this month carry this theme
+              this week carry this theme
             </span>
           </div>
 

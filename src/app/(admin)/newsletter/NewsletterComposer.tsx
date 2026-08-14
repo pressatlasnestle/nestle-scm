@@ -16,14 +16,14 @@ import {
 } from "@/lib/newsletter/edition";
 import { renderEditionHtml } from "@/lib/newsletter/email";
 import type { EditionSnapshot } from "@/lib/newsletter/snapshot";
-import { fullDayLabel, type Month } from "@/lib/newsletter/month";
+import { fullDayLabel, weekRangeLabel, type Week } from "@/lib/newsletter/week";
 import { saveEdition, sendEdition } from "./actions";
 import { ActionsEditor, AuthoredTextarea, WatchListEditor } from "./AuthoredFields";
 import { PressPicker } from "./PressPicker";
 import { EditionPreview } from "./EditionPreview";
 
 export type EditionListItem = {
-  monthStart: string;
+  weekStart: string;
   status: string;
   sentAt: string | null;
 };
@@ -51,8 +51,9 @@ const selectStyle: CSSProperties = {
  * come from one function rather than two that agree today.
  */
 export function NewsletterComposer({
-  month,
-  months,
+  week,
+  weeks,
+  weekCounts,
   editions,
   status,
   exists,
@@ -68,8 +69,10 @@ export function NewsletterComposer({
   baseUrl,
   canCurate,
 }: {
-  month: Month;
-  months: Month[];
+  week: Week;
+  weeks: Week[];
+  /** ISO Monday → coded-article count, so a thin week is visible unopened. */
+  weekCounts: Record<string, number>;
   editions: EditionListItem[];
   status: "draft" | "sent";
   exists: boolean;
@@ -94,6 +97,7 @@ export function NewsletterComposer({
 
   const frozen = status === "sent";
   const editable = canCurate && !frozen;
+  const rangeLabel = weekRangeLabel(week);
 
   const [headlineRead, setHeadlineRead] = useState(initialAuthored.headlineRead);
   const [regionalCommentary, setRegionalCommentary] = useState(
@@ -157,15 +161,15 @@ export function NewsletterComposer({
   );
   const nothingToSend = (edition?.sections ?? []).every((s) => !s.present);
 
-  function selectMonth(start: string) {
+  function selectWeek(start: string) {
     const params = new URLSearchParams(searchParams.toString());
-    params.set("month", start);
+    params.set("week", start);
     startNavigation(() => router.push(`${pathname}?${params.toString()}`));
   }
 
   function draftPayload() {
     return {
-      monthStart: month.start,
+      weekStart: week.start,
       headlineRead,
       regionalCommentary,
       reliabilityNote,
@@ -180,7 +184,7 @@ export function NewsletterComposer({
     try {
       const result = await saveEdition(draftPayload());
       if (result.ok) {
-        toast.success(`${month.label} draft saved.`);
+        toast.success(`Draft for ${rangeLabel} saved.`);
         router.refresh();
       } else {
         toast.error(result.error);
@@ -196,7 +200,7 @@ export function NewsletterComposer({
       const result = await sendEdition(draftPayload());
       if (result.ok) {
         setConfirmSend(false);
-        toast.success(`${month.label} is frozen. Copy it out and paste it in.`);
+        toast.success(`${rangeLabel} is frozen. Copy it out and paste it in.`);
         router.refresh();
       } else {
         toast.error(result.error);
@@ -206,7 +210,7 @@ export function NewsletterComposer({
     }
   }
 
-  const statusByMonth = new Map(editions.map((e) => [e.monthStart, e.status]));
+  const statusByWeek = new Map(editions.map((e) => [e.weekStart, e.status]));
 
   return (
     <>
@@ -214,25 +218,29 @@ export function NewsletterComposer({
         <div>
           <h1>Newsletter</h1>
           <p>
-            The monthly <strong>Ocean Freight Update — AOA</strong>. Everything
-            on the right is read from the database and recomputed as you work;
-            everything on the left is yours to write. Sending freezes the
-            edition and exports it — nothing is mailed from here.
+            The weekly <strong>Ocean Freight Update — AOA</strong>, Monday to
+            Sunday inclusive. Everything on the right is read from the database
+            and recomputed as you work; everything on the left is yours to
+            write. Sending freezes the edition and exports it — nothing is
+            mailed from here.
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <select
             style={selectStyle}
-            aria-label="Month"
-            value={month.start}
+            aria-label="Week"
+            value={week.start}
             disabled={navigating || busy}
-            onChange={(e) => selectMonth(e.target.value)}
+            onChange={(e) => selectWeek(e.target.value)}
           >
-            {months.map((m) => {
-              const state = statusByMonth.get(m.start);
+            {weeks.map((w) => {
+              const state = statusByWeek.get(w.start);
+              // The coded count is in the option itself so a quiet week is
+              // visible before it is opened rather than after.
+              const count = weekCounts[w.start] ?? 0;
               return (
-                <option key={m.start} value={m.start}>
-                  {m.label}
+                <option key={w.start} value={w.start}>
+                  {weekRangeLabel(w)} · {count} coded
                   {state === "sent" ? " · sent" : state ? " · draft" : ""}
                 </option>
               );
@@ -245,8 +253,8 @@ export function NewsletterComposer({
         <div className="notice notice-error">
           <div className="eyebrow">This edition cannot be rendered</div>
           <p>
-            The {month.label} edition is marked sent but its snapshot could not
-            be read. It is deliberately <strong>not</strong> recomputed from
+            The edition for {rangeLabel} is marked sent but its snapshot could
+            not be read. It is deliberately <strong>not</strong> recomputed from
             today&apos;s data — that would silently replace the record of what
             was actually sent. The stored row needs looking at directly.
           </p>
@@ -255,7 +263,7 @@ export function NewsletterComposer({
 
       {loadError && (
         <div className="notice notice-error">
-          <div className="eyebrow">Could not load the month&apos;s coverage</div>
+          <div className="eyebrow">Could not load the week&apos;s coverage</div>
           <p>{loadError}</p>
         </div>
       )}
@@ -275,10 +283,10 @@ export function NewsletterComposer({
 
       {truncated && (
         <div className="notice notice-warn">
-          <div className="eyebrow">Partial month</div>
+          <div className="eyebrow">Partial week</div>
           <p>
-            This month hit the per-month row ceiling, so the press candidates
-            below are not the complete set.
+            This week hit the per-week row ceiling, so the press candidates below
+            are not the complete set.
           </p>
         </div>
       )}
@@ -301,8 +309,8 @@ export function NewsletterComposer({
             <>
               <AuthoredTextarea
                 label="Headline read"
-                hint="Three or four sentences. What a cargo owner needs to take from this month before reading anything else."
-                placeholder="The read on the month — not a summary of the figures below, but what they mean for us."
+                hint="Three or four sentences. What a cargo owner needs to take from this week before reading anything else."
+                placeholder="The read on the week — not a summary of the figures below, but what they mean for us."
                 rows={5}
                 value={headlineRead}
                 disabled={!editable || busy}
@@ -312,7 +320,7 @@ export function NewsletterComposer({
               <AuthoredTextarea
                 label="Regional commentary"
                 hint="Sits under the regional congestion chart. Which corridors moved, and whether it changes anything for the desk."
-                placeholder="What the regional picture means for our lanes this month."
+                placeholder="What the regional picture means for our lanes this week."
                 rows={4}
                 value={regionalCommentary}
                 disabled={!editable || busy}
@@ -321,7 +329,7 @@ export function NewsletterComposer({
 
               <AuthoredTextarea
                 label="Reliability note"
-                hint="Sits under the schedule reliability chart. Cite the Global Liner Performance issue where the number needs context."
+                hint="Sits under the schedule reliability chart. That figure is monthly and in arrears, so it will read the same for several weeks running — this is where you say whether it still means anything."
                 placeholder="How reliability is behaving on the lanes that matter, and what buffer it implies."
                 rows={4}
                 value={reliabilityNote}
@@ -349,10 +357,11 @@ export function NewsletterComposer({
           <div className="composer-col-head">
             <div className="eyebrow">Read from the data</div>
             <p>
-              Figures are levels on the most recent day entered in the month,
-              compared against the most recent day of the month before. Nothing
-              here is summed or averaged over the month, and nothing absent is
-              shown as zero.
+              Figures are levels on the most recent day entered in the week,
+              compared against the most recent day of the week before. Nothing
+              here is summed or averaged over the week, and nothing absent is
+              shown as zero. Schedule reliability is monthly and compared
+              against the previous month — the section says so.
             </p>
           </div>
 
@@ -379,10 +388,10 @@ export function NewsletterComposer({
           <div className="composer-block">
             <div className="authored-label">What moved in the press</div>
             <div className="authored-hint">
-              Every coded article published in {month.label}. Themes run busiest
-              first and stories newest first within a theme; an article carrying
-              several themes appears once, under its busiest. Toggle out
-              anything that should not go.
+              Every coded article published {rangeLabel}, Monday to Sunday
+              inclusive. Themes run busiest first and stories newest first within
+              a theme; an article carrying several themes appears once, under its
+              busiest. Toggle out anything that should not go.
             </div>
             {frozen ? (
               <FrozenPress edition={edition} />
@@ -402,8 +411,8 @@ export function NewsletterComposer({
         <div style={{ marginTop: 20 }}>
           <EditionPreview
             html={html}
-            subject={frozen ? snapshot?.subject ?? subjectLine(month) : subjectLine(month)}
-            filename={`ocean-freight-update-${month.isoLabel}.html`}
+            subject={frozen ? snapshot?.subject ?? subjectLine(week) : subjectLine(week)}
+            filename={`ocean-freight-update-${week.isoLabel}.html`}
             frozen={frozen}
           />
         </div>
@@ -453,7 +462,7 @@ export function NewsletterComposer({
 
       <ConfirmModal
         open={confirmSend}
-        title={`Send the ${month.label} edition?`}
+        title={`Send the edition for ${rangeLabel}?`}
         confirmLabel="Freeze and send"
         busy={busy}
         body={
@@ -545,23 +554,25 @@ function FrozenPress({ edition }: { edition: Edition | null }) {
       <div className="press-summary">
         <strong>{press.shown}</strong> of {press.candidates} sent
       </div>
-      {press.themes.map((t) => (
-        <div key={t.theme} className="press-theme">
-          <div className="press-theme-head">
-            <span>{t.theme}</span>
-          </div>
-          {t.items.map((item) => (
-            <div key={item.id} className="press-item">
-              <span>
-                <span className="press-headline">{item.headline}</span>
-                <span className="press-meta">
-                  {item.media ?? "outlet not recorded"}
-                </span>
-              </span>
+      {press.themes
+        .filter((t) => t.items.length > 0)
+        .map((t) => (
+          <div key={t.theme} className="press-theme">
+            <div className="press-theme-head">
+              <span>{t.theme}</span>
             </div>
-          ))}
-        </div>
-      ))}
+            {t.items.map((item) => (
+              <div key={item.id} className="press-item">
+                <span>
+                  <span className="press-headline">{item.headline}</span>
+                  <span className="press-meta">
+                    {item.media ?? "outlet not recorded"}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

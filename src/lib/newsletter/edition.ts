@@ -7,29 +7,38 @@
  * whole of it is frozen into `snapshot` exactly once, at send.
  *
  * THE FIGURES ARE STOCKS, NOT FLOWS. TEU at anchorage is a level on a given
- * day. Summing a month of daily readings, or averaging them, and calling the
- * result "September" describes nothing that was ever true of the port. So the
- * month's headline figure is the MOST RECENTLY ENTERED DAY inside it, and it
- * carries that date wherever it appears — "as at 14 Sep". The delta compares
- * that day against the most recently entered day of the prior month, and is
- * labelled with both dates for the same reason.
+ * day. Summing a week of daily readings, or averaging them, and calling the
+ * result "the week of 10 August" describes nothing that was ever true of the
+ * port. So the week's headline figure is the MOST RECENTLY ENTERED DAY inside
+ * it, and it carries that date wherever it appears — "as at 14 Aug". The delta
+ * compares that day against the most recently entered day of the prior week,
+ * and is labelled with both dates for the same reason.
  *
- * Deltas are always live on both sides, including when the prior month has a
+ * Deltas are always live on both sides, including when the prior week has a
  * sent edition. A sent edition is frozen so that what the client received
  * cannot change; it is not a frozen basis for future arithmetic. If the curator
- * back-fills two more days of September after sending, October should compare
- * against the fullest September reading available — and the date label on the
- * comparison is what keeps that honest rather than surprising.
+ * back-fills two more days after sending, the next week should compare against
+ * the fullest reading available — and the date label on the comparison is what
+ * keeps that honest rather than surprising.
  *
  * ABSENT IS NOT ZERO, AND NOT-COMPARABLE IS NOT UNCHANGED. A metric nobody
  * entered has no row. A metric with nothing to compare against reads "first
  * edition", never "0%" and never a dash — a zero delta is a claim that nothing
  * moved, which is a different statement from having no basis for a claim.
+ *
+ * SCHEDULE RELIABILITY IS THE ONE MONTHLY THING AND STAYS MONTHLY.
+ * Sea-Intelligence publishes it monthly and in arrears, so four consecutive
+ * weekly editions legitimately carry the same figure and the same GLP issue.
+ * It therefore does NOT get a week-on-week delta: comparing a carried-forward
+ * figure against itself would print "0%" every week, which is precisely the
+ * "nothing moved" claim this file exists to refuse. It compares against the
+ * previous PUBLISHED month instead, and says so.
  */
 
 import type { Json } from "@/types/database.types";
 import {
   fleetStatusValues,
+  monthOf,
   readNumber,
   readObject,
   type CongestionRow,
@@ -37,7 +46,14 @@ import {
   type PortCongestionRow,
   type ScheduleReliabilityRow,
 } from "@/lib/analysis/operational";
-import { dayLabel, previousMonth, type Month } from "./month";
+import {
+  dayLabel,
+  monthLabel,
+  previousWeek,
+  weekRangeLabel,
+  weekRangeShort,
+  type Week,
+} from "./week";
 import {
   selectPress,
   type PressCandidate,
@@ -52,18 +68,24 @@ export type Reading = {
   value: number;
   /**
    * The day the level was read from, YYYY-MM-DD — or null for a figure that is
-   * published monthly in the first place. Schedule reliability has no "as at"
-   * day because Sea-Intelligence does not publish one; inventing the last day
-   * of the month would be a date nobody measured.
+   * not read from a day at all. Schedule reliability has no "as at" day because
+   * Sea-Intelligence does not publish one; inventing the last day of the month
+   * would be a date nobody measured.
    */
   asAt: string | null;
+  /**
+   * How to name this reading when it has no day — "July 2026". Only used for
+   * the monthly series, and only to keep "vs last month" from being the vaguest
+   * thing on the page.
+   */
+  label?: string | null;
 };
 
 export type Delta =
-  /** Nothing was ever recorded before this month. */
+  /** Nothing was ever recorded before this week. */
   | { kind: "first-edition" }
-  /** Earlier data exists, but the immediately preceding month has none. */
-  | { kind: "no-prior"; priorMonthLabel: string }
+  /** Earlier data exists, but the immediately preceding period has none. */
+  | { kind: "no-prior"; priorPeriodLabel: string }
   | {
       kind: "change";
       absolute: number;
@@ -77,18 +99,18 @@ export type Delta =
  * Builds the comparison for one metric.
  *
  * `hasHistoryBefore` separates the two absences that must never be collapsed:
- * a genuine first edition, and a gap where the previous month simply was not
+ * a genuine first edition, and a gap where the previous week was simply never
  * entered. Both refuse to print a number; only one of them is "first edition".
  */
 export function deltaBetween(
   current: Reading,
   prior: Reading | null,
-  month: Month,
+  priorPeriodLabel: string,
   hasHistoryBefore: boolean
 ): Delta {
   if (!prior) {
     return hasHistoryBefore
-      ? { kind: "no-prior", priorMonthLabel: previousMonth(month).label }
+      ? { kind: "no-prior", priorPeriodLabel }
       : { kind: "first-edition" };
   }
   const absolute = current.value - prior.value;
@@ -101,14 +123,18 @@ export function deltaBetween(
   };
 }
 
-/** The most recently dated row in a set already scoped to one month. */
-export function latestInMonth<T extends { day_of: string }>(rows: T[]): T | null {
+/** The most recently dated row in a set already scoped to one week. */
+export function latestInWeek<T extends { day_of: string }>(rows: T[]): T | null {
   if (rows.length === 0) return null;
   return rows.reduce((best, r) => (r.day_of > best.day_of ? r : best));
 }
 
-function reading(value: number | null, asAt: string | null): Reading | null {
-  return value === null ? null : { value, asAt };
+function reading(
+  value: number | null,
+  asAt: string | null,
+  label?: string | null
+): Reading | null {
+  return value === null ? null : { value, asAt, label };
 }
 
 // ---------------------------------------------------------------------------
@@ -121,9 +147,9 @@ export type GlanceRow = {
   value: number;
   /** "TEU", "%", "ships", "days" — rendered after the figure. */
   unit: string;
-  /** The reading date, or null for a monthly-published figure. */
+  /** The reading date, or null for a figure not read from a day. */
   asAt: string | null;
-  /** Extra provenance, e.g. "Global Liner Performance issue 158". */
+  /** Extra provenance, e.g. the GLP issue and the month it covers. */
   note: string | null;
   delta: Delta;
 };
@@ -173,7 +199,7 @@ export type RegionBar = {
 function regionBars(
   current: CongestionRow | null,
   prior: CongestionRow | null,
-  month: Month,
+  priorWeekLabel: string,
   hasHistoryBefore: boolean
 ): RegionBar[] {
   if (!current) return [];
@@ -201,7 +227,7 @@ function regionBars(
       delta: deltaBetween(
         { value, asAt: current.day_of },
         reading(prior ? readNumber(then[region.key]) : null, prior?.day_of ?? null),
-        month,
+        priorWeekLabel,
         hasHistoryBefore
       ),
     });
@@ -229,7 +255,7 @@ export type PortWatchRow = {
   ratioDelta: Delta | null;
 };
 
-/** The latest row per port inside a set already scoped to one month. */
+/** The latest row per port inside a set already scoped to one week. */
 function latestPerPort(rows: PortCongestionRow[]): Map<string, PortCongestionRow> {
   const out = new Map<string, PortCongestionRow>();
   for (const row of rows) {
@@ -242,7 +268,7 @@ function latestPerPort(rows: PortCongestionRow[]): Map<string, PortCongestionRow
 function portWatch(
   current: PortCongestionRow[],
   prior: PortCongestionRow[],
-  month: Month,
+  priorWeekLabel: string,
   hasHistoryBefore: boolean
 ): PortWatchRow[] {
   const now = latestPerPort(current);
@@ -264,7 +290,7 @@ function portWatch(
           : deltaBetween(
               { value: teu, asAt: row.day_of },
               reading(was?.teu_anchorage ?? null, was?.day_of ?? null),
-              month,
+              priorWeekLabel,
               hasHistoryBefore
             ),
       shipsAnchorage: row.ships_anchorage,
@@ -276,7 +302,7 @@ function portWatch(
           : deltaBetween(
               { value: ratio, asAt: row.day_of },
               reading(was?.queue_berth_ratio ?? null, was?.day_of ?? null),
-              month,
+              priorWeekLabel,
               hasHistoryBefore
             ),
     });
@@ -303,12 +329,25 @@ export type FleetBar = {
 };
 
 // ---------------------------------------------------------------------------
-// Schedule reliability
+// Schedule reliability — monthly inside a weekly edition
 // ---------------------------------------------------------------------------
 
 export type ReliabilityBlock = {
+  /** The month the figures describe — the reliability row's OWN month. */
   monthLabel: string;
   glpIssue: number | null;
+  /**
+   * True when the figures are from a month other than the one the week sits in.
+   * In a weekly cadence this is the normal case, not an exception, and it has
+   * to be said out loud: four consecutive editions carrying the same number
+   * with no explanation read as a fresh weekly figure that mysteriously never
+   * moves, and a reader will eventually act on it as if it were new.
+   */
+  carriedForward: boolean;
+  /** The month the week itself sits in, for the "not X" half of that sentence. */
+  weekMonthLabel: string;
+  /** The published month the deltas compare against, or null if there is none. */
+  priorMonthLabel: string | null;
   globalPct: number | null;
   globalDelta: Delta | null;
   avgDelayDays: number | null;
@@ -410,23 +449,25 @@ export function readAuthored(row: {
 // ---------------------------------------------------------------------------
 
 export type EditionInput = {
-  month: Month;
+  week: Week;
   congestion: CongestionRow[];
   priorCongestion: CongestionRow[];
   fleet: FleetStatusRow[];
   priorFleet: FleetStatusRow[];
   ports: PortCongestionRow[];
   priorPorts: PortCongestionRow[];
+  /** The most recent reliability month AT OR BEFORE the week — carried forward. */
   reliability: ScheduleReliabilityRow | null;
+  /** The most recent published month STRICTLY BEFORE that one. */
   priorReliability: ScheduleReliabilityRow | null;
   press: PressCandidate[];
   includedArticleIds: string[] | null;
-  /** Whether any operational row exists dated before this month. */
+  /** Whether any operational row exists dated before this week. */
   hasHistoryBefore: boolean;
 };
 
 export type Generated = {
-  month: Month;
+  week: Week;
   glance: GlanceRow[];
   regions: RegionBar[];
   /** The day the regional breakdown was read from. */
@@ -452,17 +493,38 @@ export type Edition = {
  * answers it by producing nothing rather than producing a zero.
  */
 export function buildGenerated(input: EditionInput): Generated {
-  const { month, hasHistoryBefore } = input;
+  const { week, hasHistoryBefore } = input;
+  const priorWeekLabel = weekRangeShort(previousWeek(week));
 
-  const congestionNow = latestInMonth(input.congestion);
-  const congestionThen = latestInMonth(input.priorCongestion);
-  const fleetNow = latestInMonth(input.fleet);
-  const fleetThen = latestInMonth(input.priorFleet);
+  const congestionNow = latestInWeek(input.congestion);
+  const congestionThen = latestInWeek(input.priorCongestion);
+  const fleetNow = latestInWeek(input.fleet);
+  const fleetThen = latestInWeek(input.priorFleet);
 
   const fleetValues = fleetStatusValues(fleetNow?.status_data ?? null);
   const fleetPrior = fleetStatusValues(fleetThen?.status_data ?? null);
   const fleetShips = (values: typeof fleetValues, status: string) =>
     values.find((v) => v.status === status)?.ships ?? null;
+
+  // Reliability: monthly, and compared against the previous PUBLISHED month
+  // rather than the previous week. See the header — a carried-forward figure
+  // compared against itself prints 0% for three weeks out of four.
+  const reliabilityMonth = input.reliability
+    ? monthLabel(input.reliability.month_of)
+    : null;
+  const priorReliabilityMonth = input.priorReliability
+    ? monthLabel(input.priorReliability.month_of)
+    : null;
+  const reliabilityNote = input.reliability
+    ? [
+        input.reliability.glp_issue_number
+          ? `Global Liner Performance issue ${input.reliability.glp_issue_number}`
+          : null,
+        `${reliabilityMonth}, unchanged until the next issue`,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
 
   // --- At a glance --------------------------------------------------------
   const glanceSpecs: {
@@ -472,6 +534,7 @@ export function buildGenerated(input: EditionInput): Generated {
     value: number | null;
     asAt: string | null;
     prior: Reading | null;
+    priorPeriodLabel: string;
     note: string | null;
   }[] = [
     {
@@ -481,6 +544,7 @@ export function buildGenerated(input: EditionInput): Generated {
       value: congestionNow?.global_teu_waiting ?? null,
       asAt: congestionNow?.day_of ?? null,
       prior: reading(congestionThen?.global_teu_waiting ?? null, congestionThen?.day_of ?? null),
+      priorPeriodLabel: priorWeekLabel,
       note: null,
     },
     {
@@ -490,6 +554,7 @@ export function buildGenerated(input: EditionInput): Generated {
       value: congestionNow?.global_pct_fleet ?? null,
       asAt: congestionNow?.day_of ?? null,
       prior: reading(congestionThen?.global_pct_fleet ?? null, congestionThen?.day_of ?? null),
+      priorPeriodLabel: priorWeekLabel,
       note: null,
     },
     {
@@ -499,6 +564,7 @@ export function buildGenerated(input: EditionInput): Generated {
       value: fleetShips(fleetValues, "Ships at anchorage"),
       asAt: fleetNow?.day_of ?? null,
       prior: reading(fleetShips(fleetPrior, "Ships at anchorage"), fleetThen?.day_of ?? null),
+      priorPeriodLabel: priorWeekLabel,
       note: null,
     },
     {
@@ -508,6 +574,7 @@ export function buildGenerated(input: EditionInput): Generated {
       value: fleetShips(fleetValues, "Active Ships"),
       asAt: fleetNow?.day_of ?? null,
       prior: reading(fleetShips(fleetPrior, "Active Ships"), fleetThen?.day_of ?? null),
+      priorPeriodLabel: priorWeekLabel,
       note: null,
     },
     {
@@ -515,12 +582,15 @@ export function buildGenerated(input: EditionInput): Generated {
       label: "Schedule reliability, global",
       unit: "%",
       value: input.reliability?.global_reliability_pct ?? null,
-      // Monthly by publication, so no reading day exists to name.
+      // Monthly by publication, so there is no reading day to name.
       asAt: null,
-      prior: reading(input.priorReliability?.global_reliability_pct ?? null, null),
-      note: input.reliability?.glp_issue_number
-        ? `Global Liner Performance issue ${input.reliability.glp_issue_number}`
-        : null,
+      prior: reading(
+        input.priorReliability?.global_reliability_pct ?? null,
+        null,
+        priorReliabilityMonth
+      ),
+      priorPeriodLabel: priorReliabilityMonth ?? "the previous issue",
+      note: reliabilityNote,
     },
     {
       key: "avg_delay",
@@ -528,8 +598,13 @@ export function buildGenerated(input: EditionInput): Generated {
       unit: "days",
       value: input.reliability?.avg_delay_days ?? null,
       asAt: null,
-      prior: reading(input.priorReliability?.avg_delay_days ?? null, null),
-      note: null,
+      prior: reading(
+        input.priorReliability?.avg_delay_days ?? null,
+        null,
+        priorReliabilityMonth
+      ),
+      priorPeriodLabel: priorReliabilityMonth ?? "the previous issue",
+      note: reliabilityNote,
     },
   ];
 
@@ -545,7 +620,7 @@ export function buildGenerated(input: EditionInput): Generated {
       delta: deltaBetween(
         { value: s.value!, asAt: s.asAt },
         s.prior,
-        month,
+        s.priorPeriodLabel,
         hasHistoryBefore
       ),
     }));
@@ -555,6 +630,7 @@ export function buildGenerated(input: EditionInput): Generated {
   if (input.reliability) {
     const now = readObject(input.reliability.alliance_data);
     const then = readObject(input.priorReliability?.alliance_data ?? null);
+    const priorLabel = priorReliabilityMonth ?? "the previous issue";
     const alliances = Object.entries(now)
       .map(([name, raw]) => ({ name, value: readNumber(raw) }))
       .filter((a): a is { name: string; value: number } => a.value !== null)
@@ -564,8 +640,8 @@ export function buildGenerated(input: EditionInput): Generated {
         delta: input.priorReliability
           ? deltaBetween(
               { value: a.value, asAt: null },
-              reading(readNumber(then[a.name]), null),
-              month,
+              reading(readNumber(then[a.name]), null, priorReliabilityMonth),
+              priorLabel,
               hasHistoryBefore
             )
           : null,
@@ -573,16 +649,26 @@ export function buildGenerated(input: EditionInput): Generated {
 
     const globalPct = input.reliability.global_reliability_pct;
     reliability = {
-      monthLabel: month.label,
+      monthLabel: reliabilityMonth!,
       glpIssue: input.reliability.glp_issue_number,
+      // The week's own month is taken from its END, matching the bounded
+      // carry-forward lookup in load.ts, so a week straddling a month boundary
+      // is judged the same way in both places.
+      carriedForward: input.reliability.month_of !== monthOf(week.end),
+      weekMonthLabel: monthLabel(monthOf(week.end)),
+      priorMonthLabel: priorReliabilityMonth,
       globalPct,
       globalDelta:
         globalPct === null
           ? null
           : deltaBetween(
               { value: globalPct, asAt: null },
-              reading(input.priorReliability?.global_reliability_pct ?? null, null),
-              month,
+              reading(
+                input.priorReliability?.global_reliability_pct ?? null,
+                null,
+                priorReliabilityMonth
+              ),
+              priorLabel,
               hasHistoryBefore
             ),
       avgDelayDays: input.reliability.avg_delay_days,
@@ -601,11 +687,11 @@ export function buildGenerated(input: EditionInput): Generated {
   const press = selectPress(input.press, input.includedArticleIds);
 
   return {
-    month,
+    week,
     glance,
-    regions: regionBars(congestionNow, congestionThen, month, hasHistoryBefore),
+    regions: regionBars(congestionNow, congestionThen, priorWeekLabel, hasHistoryBefore),
     regionsAsAt: congestionNow?.day_of ?? null,
-    ports: portWatch(input.ports, input.priorPorts, month, hasHistoryBefore),
+    ports: portWatch(input.ports, input.priorPorts, priorWeekLabel, hasHistoryBefore),
     fleet: fleetValues,
     fleetAsAt: fleetNow?.day_of ?? null,
     reliability,
@@ -646,33 +732,33 @@ export function sectionStates(
     state(
       "glance",
       generated.glance.length > 0,
-      "No congestion, fleet or reliability figure has been entered for this month."
+      "No congestion, fleet or reliability figure has been entered for this week."
     ),
     state(
       "regional",
       generated.regions.length > 0,
-      "No regional breakdown was entered on any day of this month."
+      "No regional breakdown was entered on any day of this week."
     ),
     state(
       "ports",
       generated.ports.length > 0,
-      "No per-port figures were entered on any day of this month."
+      "No per-port figures were entered on any day of this week."
     ),
     state(
       "fleet",
       generated.fleet.length > 0,
-      "No fleet status was entered on any day of this month."
+      "No fleet status was entered on any day of this week."
     ),
     state(
       "reliability",
       generated.reliability !== null,
-      "No Global Liner Performance figures were entered for this month."
+      "No Global Liner Performance figures have been entered for this month or any earlier one."
     ),
     state(
       "press",
       generated.press.shown > 0,
       generated.press.candidates === 0
-        ? "No coded article was published in this month."
+        ? "No coded article was published in this week."
         : "Every candidate article has been toggled out."
     ),
     state("watchList", authored.watchList.length > 0, "Nothing written yet."),
@@ -684,9 +770,15 @@ export function sectionStates(
   ];
 }
 
-/** The subject line. Fixed shape — eleven prior editions used it. */
-export function subjectLine(month: Month): string {
-  return `Ocean Freight Update — AOA | ${month.label}`;
+/**
+ * The subject line.
+ *
+ * The date range is in it because a reader forwarding this six weeks later
+ * should not have to open it to know which week it covers. "Week of" rather
+ * than the bare range so it reads as a period and not as a publication date.
+ */
+export function subjectLine(week: Week): string {
+  return `Ocean Freight Update — AOA | Week of ${weekRangeLabel(week)}`;
 }
 
 /**
@@ -694,20 +786,22 @@ export function subjectLine(month: Month): string {
  *
  * Counts the whole candidate corpus rather than the items the curator kept: the
  * corpus is the evidence the read rests on, and the press section says
- * separately how many of it are shown.
+ * separately how many of it are shown. It restates the date range for the same
+ * reason the subject does.
  */
 export function sourceLine(generated: Generated): string {
   const { candidates, outlets } = generated.press;
+  const range = weekRangeLabel(generated.week);
   if (candidates === 0) {
-    return `No coded article was published in ${generated.month.label}.`;
+    return `No coded article was published in ${range}.`;
   }
   // "named outlets", not "outlets". Articles captured through a keyword alert
   // carry no publisher in the corpus, so they are counted in the article total
   // and not in the outlet total — see outletName() in press.ts. Saying "named"
   // is what makes the smaller number true rather than an undercount.
   return (
-    `Drawn from ${candidates} coded article${candidates === 1 ? "" : "s"} published in ` +
-    `${generated.month.label}, from ${outlets} named outlet${outlets === 1 ? "" : "s"}.`
+    `Drawn from ${candidates} coded article${candidates === 1 ? "" : "s"} published ` +
+    `${range}, from ${outlets} named outlet${outlets === 1 ? "" : "s"}.`
   );
 }
 
@@ -732,13 +826,13 @@ function round(value: number, places: number): number {
 /**
  * The delta cell.
  *
- * "first edition" and "no September figure" are TEXT, not numbers, and that is
+ * "first edition" and "no 3–9 Aug figure" are TEXT, not numbers, and that is
  * the point — neither may be rendered as 0%, as a dash, or as blank. A reader
  * who sees "0%" has been told the level did not move.
  */
 export function formatDelta(delta: Delta): string {
   if (delta.kind === "first-edition") return "first edition";
-  if (delta.kind === "no-prior") return `no ${delta.priorMonthLabel} figure`;
+  if (delta.kind === "no-prior") return `no ${delta.priorPeriodLabel} figure`;
 
   const arrow = delta.direction === "up" ? "▲" : delta.direction === "down" ? "▼" : "±";
   if (delta.percent === null) {
@@ -749,13 +843,14 @@ export function formatDelta(delta: Delta): string {
   return `${arrow} ${pct}%`;
 }
 
-/** "vs 28 Aug" — the basis of the comparison, always stated next to it. */
+/** "vs 8 Aug" / "vs July 2026" — the basis, always stated next to the change. */
 export function deltaBasis(delta: Delta): string | null {
   if (delta.kind !== "change") return null;
-  return delta.prior.asAt ? `vs ${dayLabel(delta.prior.asAt)}` : "vs last month";
+  if (delta.prior.asAt) return `vs ${dayLabel(delta.prior.asAt)}`;
+  return delta.prior.label ? `vs ${delta.prior.label}` : "vs the previous reading";
 }
 
-/** "as at 14 Sep", or null for a figure with no reading day. */
+/** "as at 14 Aug", or null for a figure with no reading day. */
 export function asAtLabel(asAt: string | null): string | null {
   return asAt ? `as at ${dayLabel(asAt)}` : null;
 }

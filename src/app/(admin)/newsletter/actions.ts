@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/auth";
 import { toActionError, type ActionResult } from "@/lib/actions/result";
 import type { Json } from "@/types/database.types";
-import { monthFromIso, parseMonthParam } from "@/lib/newsletter/month";
+import { parseIsoDate, weekContainingDate } from "@/lib/analysis/week-period";
+import { weekRangeLabel } from "@/lib/newsletter/week";
 import {
   buildGenerated,
   readAuthored,
@@ -78,8 +79,13 @@ function cleanActions(actions: string[] | undefined): Json {
 }
 
 export type EditionDraftInput = {
-  /** Any date inside the month; snapped to the 1st. */
-  monthStart: string;
+  /**
+   * Any date inside the week; snapped to that week's ISO Monday. The composer
+   * always posts a Monday, so a non-Monday value means a hand-built call — and
+   * snapping is unambiguously what was meant, where rejecting would fail for no
+   * reason the caller could act on.
+   */
+  weekStart: string;
   headlineRead?: string;
   regionalCommentary?: string;
   reliabilityNote?: string;
@@ -96,10 +102,10 @@ export type EditionDraftInput = {
 /**
  * Writes the authored half of a draft.
  *
- * Upserts on month_of, so the first save creates the edition and every later
- * one replaces it. Nothing generated is written — no figure, no press item, no
- * rendered HTML. Those are read fresh on every view, which is what lets a
- * draft follow the operational data as more days are entered.
+ * Upserts on week_of, so the first save creates the edition and every later one
+ * replaces it. Nothing generated is written — no figure, no press item, no
+ * rendered HTML. Those are read fresh on every view, which is what lets a draft
+ * follow the operational data as more days are entered.
  */
 export async function saveEdition(
   input: EditionDraftInput
@@ -107,9 +113,9 @@ export async function saveEdition(
   const { ctx, error } = await requireCurate();
   if (!ctx) return { ok: false, error: error! };
 
-  const parsed = parseMonthParam(input.monthStart);
-  if (!parsed) return { ok: false, error: "That is not a valid month." };
-  const month = monthFromIso(parsed);
+  const parsed = parseIsoDate(input.weekStart);
+  if (!parsed) return { ok: false, error: "That is not a valid week." };
+  const week = weekContainingDate(parsed);
 
   const supabase = await createClient();
 
@@ -118,18 +124,18 @@ export async function saveEdition(
   const { data: existing } = await supabase
     .from("newsletter_editions")
     .select("status, sent_at")
-    .eq("month_of", month.start)
+    .eq("week_of", week.start)
     .maybeSingle();
 
   if (existing?.status === "sent") {
     return {
       ok: false,
-      error: `The ${month.label} edition was sent and is frozen. Issue a new edition rather than editing this one.`,
+      error: `The edition for ${weekRangeLabel(week)} was sent and is frozen. Issue a new edition rather than editing this one.`,
     };
   }
 
   const payload = {
-    month_of: month.start,
+    week_of: week.start,
     status: "draft",
     headline_read: trimmed(input.headlineRead) || null,
     regional_commentary: trimmed(input.regionalCommentary) || null,
@@ -144,7 +150,7 @@ export async function saveEdition(
 
   const { error: writeError } = await supabase
     .from("newsletter_editions")
-    .upsert(payload, { onConflict: "month_of" });
+    .upsert(payload, { onConflict: "week_of" });
   if (writeError) return { ok: false, error: toEditionError(writeError) };
 
   await supabase.from("audit_log").insert({
@@ -153,10 +159,10 @@ export async function saveEdition(
     target_type: "newsletter_edition",
     target_id: null,
     // The full authored text, because the row keeps only the latest version and
-    // "what did the September read say before it was rewritten" has to be
+    // "what did the read for that week say before it was rewritten" has to be
     // answerable for something that goes out under the desk's name.
     metadata: {
-      month_of: month.start,
+      week_of: week.start,
       headline_read: payload.headline_read,
       regional_commentary: payload.regional_commentary,
       reliability_note: payload.reliability_note,
@@ -195,9 +201,10 @@ export async function sendEdition(
   const { ctx, error } = await requireCurate();
   if (!ctx) return { ok: false, error: error! };
 
-  const parsed = parseMonthParam(input.monthStart);
-  if (!parsed) return { ok: false, error: "That is not a valid month." };
-  const month = monthFromIso(parsed);
+  const parsed = parseIsoDate(input.weekStart);
+  if (!parsed) return { ok: false, error: "That is not a valid week." };
+  const week = weekContainingDate(parsed);
+  const label = weekRangeLabel(week);
 
   const saved = await saveEdition(input);
   if (!saved.ok) return saved;
@@ -209,7 +216,7 @@ export async function sendEdition(
     .select(
       "status, headline_read, regional_commentary, reliability_note, watch_list, recommended_actions, included_article_ids"
     )
-    .eq("month_of", month.start)
+    .eq("week_of", week.start)
     .maybeSingle();
 
   if (readError) return { ok: false, error: toEditionError(readError) };
@@ -217,14 +224,11 @@ export async function sendEdition(
     return { ok: false, error: "That edition could not be read back to send." };
   }
   if (row.status === "sent") {
-    return {
-      ok: false,
-      error: `The ${month.label} edition has already been sent.`,
-    };
+    return { ok: false, error: `The edition for ${label} has already been sent.` };
   }
 
   const [{ input: editionInput }, baseUrl] = await Promise.all([
-    loadEdition(supabase, month, row.included_article_ids),
+    loadEdition(supabase, week, row.included_article_ids),
     loadBaseUrl(supabase),
   ]);
 
@@ -247,7 +251,7 @@ export async function sendEdition(
   const sentAt = new Date().toISOString();
   const snapshot = buildSnapshot({
     edition,
-    subject: subjectLine(month),
+    subject: subjectLine(week),
     html: renderEditionHtml(edition, { baseUrl }),
     sentAt,
     sentByName: ctx.fullName ?? ctx.email,
@@ -261,7 +265,7 @@ export async function sendEdition(
       sent_at: sentAt,
       sent_by: ctx.userId,
     })
-    .eq("month_of", month.start)
+    .eq("week_of", week.start)
     .eq("status", "draft")
     .select("id");
 
@@ -269,7 +273,7 @@ export async function sendEdition(
   if (!updated || updated.length === 0) {
     return {
       ok: false,
-      error: `The ${month.label} edition was sent by someone else while this one was open.`,
+      error: `The edition for ${label} was sent by someone else while this one was open.`,
     };
   }
 
@@ -279,7 +283,7 @@ export async function sendEdition(
     target_type: "newsletter_edition",
     target_id: updated[0].id,
     metadata: {
-      month_of: month.start,
+      week_of: week.start,
       subject: snapshot.subject,
       sections_included: sections.filter((s) => s.present).map((s) => s.key),
       sections_dropped: sections.filter((s) => !s.present).map((s) => s.key),

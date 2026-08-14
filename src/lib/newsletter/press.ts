@@ -1,10 +1,11 @@
 /**
- * "What moved in the press" — choosing and grouping the month's coverage.
+ * "What moved in the press" — choosing and grouping the week's coverage.
  *
  * The candidate set is every `articles` row that is active, coded, and
- * published inside the edition month. Everything below is about ORDER, and the
- * order matters more than it looks: three plausible-seeming ways to rank these
- * rows all produce a section that reads correctly and carries no information.
+ * published inside the edition week — Monday to Sunday, both ends inclusive.
+ * Everything below is about ORDER, and the order matters more than it looks:
+ * three plausible-seeming ways to rank these rows all produce a section that
+ * reads correctly and carries no information.
  *
  * NOT BY ai_sentiment. Of the 161 coded articles, 68 are "Very unfavourable"
  * and 32 "Very favourable" — 62% sit at the extremes and 42% in a single
@@ -18,7 +19,7 @@
  * than an obviously broken one because nobody would ever look at it twice. It
  * is a dead column: either wire it into the coder or drop it.
  *
- * SO: recency within a theme, and theme order by how many of the month's
+ * SO: recency within a theme, and theme order by how many of the week's
  * articles carry that theme. That is honest about what it is — a volume
  * ranking and a date ranking, both of which the data actually supports.
  *
@@ -33,7 +34,7 @@ import {
   isNearDuplicateHeadline,
   normalizeHeadline,
 } from "@/lib/analysis/similarity";
-import type { Month } from "./month";
+import { weekRangeLabel, type Week } from "./week";
 
 /** The columns the press section needs. Matches the select in the page. */
 export type PressCandidate = {
@@ -62,7 +63,7 @@ export type PressItem = {
 export type PressTheme = {
   theme: string;
   /**
-   * How many of the month's articles carry this theme, BEFORE dedup. This is
+   * How many of the week's articles carry this theme, BEFORE dedup. This is
    * what orders the themes, and it is deliberately not the same number as
    * `items.length` — an article tagged with a bigger theme is counted here but
    * filed there.
@@ -82,7 +83,7 @@ export type PressSelection = {
   themes: PressTheme[];
   /** Rendered in the edition. */
   shown: number;
-  /** Coded, active articles published in the month — the whole candidate set. */
+  /** Coded, active articles published in the week — the whole candidate set. */
   candidates: number;
   /**
    * Distinct NAMED outlets behind the candidate set — see outletName(). Counts
@@ -119,9 +120,9 @@ export const UNTHEMED_GROUP = "Other coverage";
  * Articles captured through the Google Alerts channel store the ALERT QUERY in
  * `media`, not the publisher — 'Google Alert - "Red Sea" ("ocean freight" OR
  * "container shipping" OR "liner shipping")' and five others like it, together
- * covering 49 of August 2026's 106 coded articles. Printed as a byline in a
- * client-facing edition that is not merely ugly, it is false: it attributes the
- * story to a search.
+ * covering 49 of the 96 coded articles in the week of 10 August 2026. Printed
+ * as a byline in a client-facing edition that is not merely ugly, it is false:
+ * it attributes the story to a search.
  *
  * The alert queries all begin with a fixed literal prefix, so this is an exact
  * match rather than a guess. Nothing is inferred in its place — several of those
@@ -155,7 +156,7 @@ function toItem(row: PressCandidate, theme: string): PressItem {
 /**
  * Newest first, with a deterministic tiebreak.
  *
- * published_at is a `date`, so a month's worth of articles collides heavily on
+ * published_at is a `date`, so a week's worth of articles collides heavily on
  * it — a dozen stories share 14 September. Falling back to the headline keeps
  * the order stable between two renders of the same draft, which matters because
  * the curator's toggles are keyed on what they saw.
@@ -168,7 +169,7 @@ function byRecency(a: PressItem, b: PressItem): number {
 }
 
 /**
- * Groups the month's coverage into the section the edition renders.
+ * Groups the week's coverage into the section the edition renders.
  *
  * `included` is the curator's selection: NULL means the edition has not been
  * curated yet and everything is in. An empty array is a real selection meaning
@@ -179,7 +180,7 @@ export function selectPress(
   candidates: PressCandidate[],
   included: string[] | null
 ): PressSelection {
-  // --- 1. Theme volume across the whole month, before any dedup ------------
+  // --- 1. Theme volume across the whole week, before any dedup -------------
   const volume = new Map<string, number>();
   for (const row of candidates) {
     for (const theme of row.ai_themes ?? []) {
@@ -342,11 +343,11 @@ export function defaultIncludedIds(candidates: PressCandidate[]): string[] {
 }
 
 /** "September 2026" press-section caption, stated wherever the section renders. */
-export function pressCaption(month: Month, selection: PressSelection): string {
+export function pressCaption(week: Week, selection: PressSelection): string {
   return (
     `${selection.shown} of ${selection.candidates} coded article` +
-    `${selection.candidates === 1 ? "" : "s"} published in ${month.label}, ` +
-    `grouped by theme. Themes are ordered by how many of the month's articles ` +
+    `${selection.candidates === 1 ? "" : "s"} published ${weekRangeLabel(week)}, ` +
+    `grouped by theme. Themes are ordered by how many of the week's articles ` +
     `carry them; stories run newest first within a theme. An article carrying ` +
     `several themes appears once, under its busiest one.`
   );

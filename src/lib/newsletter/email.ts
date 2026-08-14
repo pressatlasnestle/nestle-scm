@@ -14,7 +14,7 @@
  * to Outlook 2007, needs no rasterisation, no image host and no CDN.
  *
  * Server-side rasterisation was the alternative and was rejected: Puppeteer on
- * Vercel means bundle size and cold starts that are a bad trade for a monthly
+ * Vercel means bundle size and cold starts that are a bad trade for a weekly
  * job, and it would put a binary dependency into a pipeline that has none.
  *
  * NON-NEGOTIABLE, and asserted by scripts/checks/newsletter.ts against the
@@ -61,7 +61,7 @@ import {
   type RegionBar,
   type SectionKey,
 } from "./edition";
-import { dayLabel } from "./month";
+import { dayLabel, weekRangeLabel } from "./week";
 import { PRESS_ITEMS_PER_THEME } from "./press";
 
 /**
@@ -238,7 +238,7 @@ function glanceSection(edition: Edition): string {
   return (
     heading(
       "At a glance",
-      "Levels on the most recent day entered in the month, compared against the most recent day of the month before. These are stocks, not totals — nothing here is summed or averaged over the month."
+      "Levels on the most recent day entered in the week, compared against the most recent day of the week before. These are stocks, not totals — nothing here is summed or averaged over the week. Schedule reliability is the exception: it is published monthly and compared against the previous month, which the row says."
     ) +
     card(
       `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;">${rows}</table>`
@@ -302,7 +302,7 @@ function portSection(edition: Edition): string {
   /**
    * Every row normally reads from the same day and compares against the same
    * day, so both dates are stated ONCE in the caption and dropped from the
-   * cells. That is not only tidier: the repeated "as at 24 Aug" and "vs 27 Jul"
+   * cells. That is not only tidier: the repeated "as at 14 Aug" and "vs 8 Aug"
    * were what made this table's minimum width 362px, against the 291px a 375px
    * phone actually leaves for content. It rendered correctly at every width the
    * design was checked at and forced a sideways scroll on a phone.
@@ -367,12 +367,12 @@ function portSection(edition: Edition): string {
     heading(
       "Port watch",
       `The tracked ports${commonDay ? `, as at ${dayLabel(commonDay)}` : ""}${
-        commonBasis ? `, against ${commonBasis.replace(/^vs /, "")}` : ", month on month"
+        commonBasis ? `, against ${commonBasis.replace(/^vs /, "")}` : ", week on week"
       }. The queue / berth ratio is printed as Linerlytica publishes it, never computed from the ship counts beside it — the source smooths it and the two figures differ.`
     ) +
     card(
       `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;">
-        <tr>${th("Port")}${th("TEU at anchor", "right")}${th("MoM", "right")}${th(
+        <tr>${th("Port")}${th("TEU at anchor", "right")}${th("WoW", "right")}${th(
         "Queue / berth",
         "right"
       )}</tr>
@@ -473,12 +473,33 @@ function reliabilitySection(edition: Edition): string {
       )}</div>`
     : "";
 
+  /**
+   * The caption a monthly figure needs inside a weekly edition.
+   *
+   * Sea-Intelligence publishes reliability monthly and in arrears, so four
+   * consecutive weekly editions carry the same number and the same GLP issue.
+   * Left unexplained that reads as a fresh weekly figure which mysteriously
+   * never moves — worse than showing nothing, because a reader will eventually
+   * act on it as if it were new. So the caption states three things every time:
+   * the month it covers, the issue it came from, and that it is unchanged until
+   * the next issue.
+   *
+   * It also says what the percentages beside it are measured against, because
+   * they are month-on-month while everything else in the edition is week on
+   * week, and an unlabelled mixture is worse than either alone.
+   */
   return (
     heading(
       "Schedule reliability",
       `${r.monthLabel}${
         r.glpIssue ? ` · Global Liner Performance issue ${r.glpIssue}` : ""
-      }. Source: Sea-Intelligence.`
+      }. Published monthly and in arrears${
+        r.carriedForward ? `, so these are not ${r.weekMonthLabel} figures` : ""
+      } — unchanged since that issue, and identical in every weekly edition until the next one.${
+        r.priorMonthLabel
+          ? ` Changes are against ${r.priorMonthLabel}, not against last week.`
+          : ""
+      } Source: Sea-Intelligence.`
     ) + card(figures + alliances + note)
   );
 }
@@ -528,7 +549,7 @@ function pressSection(edition: Edition): string {
       "What moved in the press",
       `${press.shown} of ${press.candidates} coded article${
         press.candidates === 1 ? "" : "s"
-      } published in ${edition.generated.month.label}. Themes run busiest first; stories run newest first within a theme, at most ${PRESS_ITEMS_PER_THEME} each. An article carrying several themes appears once, under its busiest one.`
+      } published ${weekRangeLabel(edition.generated.week)}, Monday to Sunday inclusive. Themes run busiest first; stories run newest first within a theme, at most ${PRESS_ITEMS_PER_THEME} each. An article carrying several themes appears once, under its busiest one.`
     ) +
     card(
       // A theme whose every candidate was toggled out or suppressed is carried
@@ -642,7 +663,7 @@ export function renderEditionHtml(
   const explore = options.baseUrl
     ? `<div style="margin-top:10px;"><a href="${esc(
         options.baseUrl.replace(/\/+$/, "")
-      )}/analysis" style="font-family:${SANS};font-size:12px;color:${C.teal};text-decoration:underline;">Explore the full month in the Analysis panel</a></div>`
+      )}/analysis?week=${esc(edition.generated.week.start)}" style="font-family:${SANS};font-size:12px;color:${C.teal};text-decoration:underline;">Explore this week in the Analysis panel</a></div>`
     : "";
 
   return `<!DOCTYPE html>
@@ -650,7 +671,7 @@ export function renderEditionHtml(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(subjectLine(edition.generated.month))}</title>
+<title>${esc(subjectLine(edition.generated.week))}</title>
 </head>
 <body style="margin:0;padding:0;background:${C.pageBg};-webkit-text-size-adjust:100%;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:${C.pageBg};">
@@ -660,10 +681,15 @@ export function renderEditionHtml(
 
         <tr><td style="background:${C.navy};border-radius:12px 12px 0 0;padding:24px 20px 20px;">
           <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;text-transform:uppercase;color:${C.teal};">Ocean Freight Update &middot; AOA</div>
-          <div style="font-family:${SANS};font-size:23px;font-weight:700;color:#ffffff;margin-top:7px;line-height:1.25;">${esc(
-            edition.generated.month.label
+          <!-- The date range, not a period name. A reader forwarding this six
+               weeks later should not have to open it to know which week it
+               covers. Sized down from 23px because "28 Dec 2026 – 3 Jan 2027"
+               is more than twice the width a month name was, and the header is
+               the one place where a wrap looks like a mistake. -->
+          <div style="font-family:${SANS};font-size:20px;font-weight:700;color:#ffffff;margin-top:7px;line-height:1.3;">Week of ${esc(
+            weekRangeLabel(edition.generated.week)
           )}</div>
-          <div style="font-family:${SANS};font-size:12px;color:${C.dim};margin-top:5px;line-height:1.5;">Ocean Hub Desk &middot; monthly market and coverage read</div>
+          <div style="font-family:${SANS};font-size:12px;color:${C.dim};margin-top:5px;line-height:1.5;">Ocean Hub Desk &middot; Monday to Sunday &middot; weekly market and coverage read</div>
         </td></tr>
 
         ${body}

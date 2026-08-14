@@ -1,24 +1,28 @@
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/auth";
-import { recentMonths, resolveMonth, type Month } from "@/lib/newsletter/month";
+import {
+  recentEditionWeeks,
+  resolveEditionWeek,
+  type Week,
+} from "@/lib/newsletter/week";
 import { EMPTY_AUTHORED, readAuthored } from "@/lib/newsletter/edition";
-import { loadBaseUrl, loadEdition } from "@/lib/newsletter/load";
+import { loadBaseUrl, loadEdition, loadWeekCounts } from "@/lib/newsletter/load";
 import { parseSnapshot } from "@/lib/newsletter/snapshot";
 import { NewsletterComposer, type EditionListItem } from "./NewsletterComposer";
 
 export const dynamic = "force-dynamic";
 
-/** How many months the dropdown offers. A year of editions. */
-const MONTH_CHOICES = 12;
+/** How many weeks the dropdown offers. Roughly a quarter of editions. */
+const WEEK_CHOICES = 12;
 
-type SearchParams = { month?: string };
+type SearchParams = { week?: string };
 
 /**
- * The monthly "Ocean Freight Update — AOA" composer.
+ * The weekly "Ocean Freight Update — AOA" composer.
  *
- * A sibling of /analysis rather than a tab inside it: different cadence
- * (monthly against weekly), different job (composing something to send against
- * reading what happened) and different audience (the client against the desk).
+ * A sibling of /analysis rather than a tab inside it: same ISO week, different
+ * job. /analysis is for reading what happened; this is for composing what gets
+ * sent, to a different audience, on a Monday.
  *
  * All roles may open it, same tier as Analysis. Everything authored or sendable
  * checks canCurate in its own server action, and the database checks it again.
@@ -33,54 +37,59 @@ export default async function NewsletterPage({
   const sp = await searchParams;
 
   const now = new Date();
-  const month = resolveMonth(sp.month, now);
+  const week = resolveEditionWeek(sp.week, now);
 
-  // A deep link can name a month older than the dropdown reaches. Merging it in
+  // A deep link can name a week older than the dropdown reaches. Merging it in
   // keeps the select consistent with what is on screen, rather than rendering a
   // control whose value matches none of its options.
-  const choices: Month[] = recentMonths(now, MONTH_CHOICES);
-  const months = choices.some((m) => m.start === month.start)
+  const choices: Week[] = recentEditionWeeks(now, WEEK_CHOICES);
+  const weeks = choices.some((w) => w.start === week.start)
     ? choices
-    : [...choices, month].sort((a, b) => (a.start < b.start ? 1 : -1));
+    : [...choices, week].sort((a, b) => (a.start < b.start ? 1 : -1));
 
-  const [{ data: edition }, { data: allEditions }] = await Promise.all([
+  const [{ data: edition }, { data: allEditions }, weekCounts] = await Promise.all([
     supabase
       .from("newsletter_editions")
       .select(
-        "month_of, status, headline_read, regional_commentary, reliability_note, watch_list, recommended_actions, included_article_ids, snapshot, sent_at, entered_at"
+        "week_of, status, headline_read, regional_commentary, reliability_note, watch_list, recommended_actions, included_article_ids, snapshot, sent_at, entered_at"
       )
-      .eq("month_of", month.start)
+      .eq("week_of", week.start)
       .maybeSingle(),
     // Drives the status marks in the dropdown, so a curator can tell at a
-    // glance which months are already frozen without opening each one.
+    // glance which weeks are already frozen without opening each one.
     supabase
       .from("newsletter_editions")
-      .select("month_of, status, sent_at")
-      .order("month_of", { ascending: false }),
+      .select("week_of, status, sent_at")
+      .order("week_of", { ascending: false }),
+    // And the coded-article count per week, so a thin week is visible BEFORE it
+    // is opened. Permanently useful, not a workaround for the corpus being
+    // young — some weeks are genuinely quiet.
+    loadWeekCounts(supabase, weeks),
   ]);
 
   const sent = edition?.status === "sent";
   const snapshot = sent ? parseSnapshot(edition?.snapshot ?? null) : null;
 
   // A sent edition renders from its snapshot and nothing else — no live read,
-  // no recompute. Loading the month's rows anyway would only create the chance
+  // no recompute. Loading the week's rows anyway would only create the chance
   // of showing them.
   const loaded = sent
     ? null
-    : await loadEdition(supabase, month, edition?.included_article_ids ?? null);
+    : await loadEdition(supabase, week, edition?.included_article_ids ?? null);
 
   const baseUrl = await loadBaseUrl(supabase);
 
   const editionList: EditionListItem[] = (allEditions ?? []).map((e) => ({
-    monthStart: e.month_of,
+    weekStart: e.week_of,
     status: e.status,
     sentAt: e.sent_at,
   }));
 
   return (
     <NewsletterComposer
-      month={month}
-      months={months}
+      week={week}
+      weeks={weeks}
+      weekCounts={weekCounts}
       editions={editionList}
       status={edition?.status === "sent" ? "sent" : "draft"}
       exists={Boolean(edition)}

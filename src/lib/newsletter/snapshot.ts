@@ -25,13 +25,13 @@
 
 import type { Json } from "@/types/database.types";
 import type { Authored, Edition, Generated, SectionState } from "./edition";
-import type { Month } from "./month";
+import type { Week } from "./week";
 
 export const SNAPSHOT_VERSION = 1;
 
 export type EditionSnapshot = {
   version: number;
-  month: Month;
+  week: Week;
   subject: string;
   generated: Generated;
   authored: Authored;
@@ -56,7 +56,7 @@ export function buildSnapshot(input: {
 }): EditionSnapshot {
   return {
     version: SNAPSHOT_VERSION,
-    month: input.edition.generated.month,
+    week: input.edition.generated.week,
     subject: input.subject,
     generated: input.edition.generated,
     authored: input.edition.authored,
@@ -82,7 +82,7 @@ export function parseSnapshot(value: Json | null): EditionSnapshot | null {
   if (typeof raw.version !== "number" || raw.version > SNAPSHOT_VERSION) return null;
   if (typeof raw.html !== "string" || raw.html.length === 0) return null;
   if (!raw.generated || typeof raw.generated !== "object") return null;
-  if (!raw.month || typeof raw.month !== "object") return null;
+  if (!raw.week || typeof raw.week !== "object") return null;
 
   return value as unknown as EditionSnapshot;
 }

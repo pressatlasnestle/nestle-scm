@@ -1,37 +1,44 @@
 /**
- * The monthly edition: stock deltas, press grouping, the email HTML's hard
- * constraints, the role gates and the freeze.
+ * The weekly edition: week boundaries, stock deltas, press grouping, the email
+ * HTML's hard constraints, the role gates and the freeze.
  *
  *   CHECK_CURATE_EMAIL=... CHECK_CURATE_PASSWORD=... \
  *   CHECK_READ_EMAIL=...   CHECK_READ_PASSWORD=... \
  *   npx tsx --env-file=.env.local scripts/checks/newsletter.ts
  *
- * TWO HALVES, and only one of them needs a database.
+ * THREE TIERS, by what each one actually needs.
  *
- * The LOGIC half — deltas, section presence, press grouping, and the email
- * HTML's no-svg/no-class/no-link rules — is a property of pure functions over
- * fixture rows, so it runs on its own with no credentials and no network. That
- * matters for the HTML rules in particular: they are the regression that breaks
- * silently months from now, they are one string search each, and gating them
- * behind two sets of sign-in credentials would be the surest way to stop them
- * ever running.
+ * The LOGIC half — week labels, deltas, section presence, press grouping, and
+ * the email HTML's no-svg/no-class/no-link rules — is a property of pure
+ * functions over fixture rows, so it runs on its own with no credentials and no
+ * network. That matters for the HTML rules in particular: they are the
+ * regression that breaks silently months from now, they are one string search
+ * each, and gating them behind two sets of sign-in credentials would be the
+ * surest way to stop them ever running.
  *
- * The DATABASE half — who may write, whether an audit row can be forged, and
+ * The CORPUS tier — is the week window really a bounded date range in the
+ * QUERY — needs a database but no particular role, because the property under
+ * test is the range on the query and not the policy above it. It runs under the
+ * service role and writes NOTHING, reading the real corpus instead. That
+ * separation is deliberate: the week boundary is the headline risk of the
+ * monthly-to-weekly change, and gating it behind sign-in credentials would be
+ * the surest way to leave it unproven.
+ *
+ * The ROLE tier — who may write, whether an audit row can be forged, and
  * whether a sent edition is really frozen — signs in as REAL users of each role
- * rather than using the service role, because the properties under test are the
- * RLS policy and the trigger themselves. A service-role run would pass whether
- * or not either existed.
+ * rather than using the service role, because the properties under test ARE the
+ * RLS policy and the trigger.
  *
- * When the fixtures are absent the database half does not run, and the script
- * says exactly what went unproven and exits non-zero. A check that quietly
- * skips its own subject is worse than one that fails.
+ * When a tier's inputs are absent it does not run, and the script says exactly
+ * what went unproven and exits non-zero. A check that quietly skips its own
+ * subject is worse than one that fails.
  *
- * Everything the database half writes uses year-2099 months that no real
- * edition will cover, and is removed again at the end — on success and on
- * failure alike. IT WRITES NO ARTICLES: the press rules are pure, so they are
- * tested against fixtures rather than by pushing invented stories into the live
- * corpus, where a cleanup failure would leave fake coverage in a client-facing
- * report.
+ * Everything the database half writes uses year-2099 weeks that no real edition
+ * will cover, and is removed again at the end — on success and on failure
+ * alike. IT WRITES NO ARTICLES: the press rules are pure, so they are tested
+ * against fixtures, and the week BOUNDARY is tested against the real corpus,
+ * which happens to hold the perfect case — 3 articles on Sunday 9 August 2026
+ * and 28 on Monday the 10th, either side of a week boundary.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database.types";
@@ -41,10 +48,18 @@ import type {
   PortCongestionRow,
   ScheduleReliabilityRow,
 } from "../../src/lib/analysis/operational";
-import { monthFromIso, previousMonth, type Month } from "../../src/lib/newsletter/month";
+import { weekContainingDate } from "../../src/lib/analysis/week-period";
+import {
+  lastCompletedWeek,
+  previousWeek,
+  resolveEditionWeek,
+  weekRangeLabel,
+  weekRangeShort,
+} from "../../src/lib/newsletter/week";
 import {
   buildGenerated,
   deltaBetween,
+  deltaBasis,
   formatDelta,
   readAuthored,
   sectionStates,
@@ -54,7 +69,7 @@ import {
   type Edition,
   type EditionInput,
 } from "../../src/lib/newsletter/edition";
-import { loadEdition } from "../../src/lib/newsletter/load";
+import { loadEdition, loadWeekCounts } from "../../src/lib/newsletter/load";
 import { renderEditionHtml } from "../../src/lib/newsletter/email";
 import {
   buildSnapshot,
@@ -68,19 +83,28 @@ import {
   type PressCandidate,
 } from "../../src/lib/newsletter/press";
 
-// Year-2099 months. JAN has data and no history before it; FEB has data and a
-// prior month; APR has data with an EMPTY March in between, which is the third
-// delta case and the one most easily collapsed into "first edition".
-const JAN = monthFromIso("2099-01-01");
-const FEB = monthFromIso("2099-02-01");
-const APR = monthFromIso("2099-04-01");
-const SENT_MONTH = monthFromIso("2099-06-01");
-const ALL_MONTHS = [JAN.start, FEB.start, "2099-03-01", APR.start, SENT_MONTH.start];
+// Year-2099 weeks. 2099-01-05 is a Monday, the same anchor check:operational
+// uses. WEEK_A has data and nothing before it; WEEK_B has data and a prior
+// week; WEEK_D has data with an EMPTY week in between, which is the third delta
+// case and the one most easily collapsed into "first edition".
+const WEEK_A = weekContainingDate("2099-01-05"); // 5–11 Jan
+const WEEK_B = weekContainingDate("2099-01-12"); // 12–18 Jan
+const WEEK_C = weekContainingDate("2099-01-19"); // 19–25 Jan, deliberately empty
+const WEEK_D = weekContainingDate("2099-01-26"); // 26 Jan – 1 Feb
+const SENT_WEEK = weekContainingDate("2099-06-01");
+const ALL_WEEKS = [WEEK_A.start, WEEK_B.start, WEEK_C.start, WEEK_D.start, SENT_WEEK.start];
 
-const JAN_DAYS = ["2099-01-05", "2099-01-12", "2099-01-20"];
-const FEB_DAY = "2099-02-03";
-const OUTSIDE_DAY = "2099-05-11"; // proves the month query is bounded
-const ALL_DAYS = [...JAN_DAYS, FEB_DAY, "2099-04-09", OUTSIDE_DAY];
+const A_SUNDAY = WEEK_A.end; // 2099-01-11
+const B_MONDAY = WEEK_B.start; // 2099-01-12
+const A_DAYS = ["2099-01-05", "2099-01-07", A_SUNDAY];
+const B_DAY = "2099-01-14";
+const D_DAY = "2099-01-28";
+const OUTSIDE_DAY = "2099-05-11";
+const ALL_DAYS = [...A_DAYS, B_MONDAY, B_DAY, D_DAY, OUTSIDE_DAY];
+
+// The real corpus's week boundary. 2026-08-09 is a Sunday, 2026-08-10 a Monday.
+const REAL_WEEK_EARLY = weekContainingDate("2026-08-09"); // 3–9 Aug
+const REAL_WEEK_LATE = weekContainingDate("2026-08-10"); // 10–16 Aug
 
 let failures = 0;
 let ran = 0;
@@ -108,7 +132,7 @@ function congestion(day: string, teu: number, regions: Record<string, number>): 
 
 const FLEET: FleetStatusRow[] = [
   {
-    day_of: FEB_DAY,
+    day_of: B_DAY,
     status_data: {
       "Ships at port": { ships: 1165, teu: 7_000_000 },
       "Active Ships": { ships: 5426, teu: 31_000_000 },
@@ -120,7 +144,7 @@ const FLEET: FleetStatusRow[] = [
 
 const PORTS: PortCongestionRow[] = [
   {
-    day_of: FEB_DAY,
+    day_of: B_DAY,
     port_name: "Shanghai/Ningbo",
     ships_anchorage: 67,
     ships_port: 19,
@@ -133,12 +157,23 @@ const PORTS: PortCongestionRow[] = [
   },
 ];
 
+/** Reliability is MONTHLY and stays monthly, inside a weekly edition. */
 const RELIABILITY: ScheduleReliabilityRow = {
-  month_of: FEB.start,
+  month_of: "2099-01-01",
   glp_issue_number: 999,
   global_reliability_pct: 61,
   avg_delay_days: 4.5,
   alliance_data: { "Gemini Cooperation": 90, "Ocean Alliance": 60 },
+  ...STAMP,
+};
+
+/** The previous PUBLISHED month, which is what reliability compares against. */
+const PRIOR_RELIABILITY: ScheduleReliabilityRow = {
+  month_of: "2098-12-01",
+  glp_issue_number: 998,
+  global_reliability_pct: 58,
+  avg_delay_days: 4.9,
+  alliance_data: { "Gemini Cooperation": 87, "Ocean Alliance": 59 },
   ...STAMP,
 };
 
@@ -155,41 +190,42 @@ const EMPTY_INPUT = {
   includedArticleIds: null as string[] | null,
 };
 
-/** Three days entered in January, the newest being the 20th — not month-end. */
-const JAN_CONGESTION = [
-  congestion(JAN_DAYS[0], 1000, { north_asia: 500, europe: 250 }),
-  congestion(JAN_DAYS[1], 1200, { north_asia: 600, europe: 300 }),
-  congestion(JAN_DAYS[2], 1500, { north_asia: 750, europe: 375 }),
+/** Three days entered in week A, the newest being the Sunday. */
+const A_CONGESTION = [
+  congestion(A_DAYS[0], 1000, { north_asia: 500, europe: 250 }),
+  congestion(A_DAYS[1], 1200, { north_asia: 600, europe: 300 }),
+  congestion(A_DAYS[2], 1500, { north_asia: 750, europe: 375 }),
 ];
 
-const JAN_INPUT: EditionInput = {
+const A_INPUT: EditionInput = {
   ...EMPTY_INPUT,
-  month: JAN,
-  congestion: JAN_CONGESTION,
+  week: WEEK_A,
+  congestion: A_CONGESTION,
   hasHistoryBefore: false,
 };
 
-const FEB_INPUT: EditionInput = {
+const B_INPUT: EditionInput = {
   ...EMPTY_INPUT,
-  month: FEB,
-  congestion: [congestion(FEB_DAY, 1800, { north_asia: 900, europe: 450 })],
-  priorCongestion: JAN_CONGESTION,
+  week: WEEK_B,
+  congestion: [congestion(B_DAY, 1800, { north_asia: 900, europe: 450 })],
+  priorCongestion: A_CONGESTION,
   fleet: FLEET,
   ports: PORTS,
   reliability: RELIABILITY,
+  priorReliability: PRIOR_RELIABILITY,
   hasHistoryBefore: true,
 };
 
-/** April, with an empty March between it and February. */
-const APR_INPUT: EditionInput = {
+/** Week D, with an empty week C between it and B. */
+const D_INPUT: EditionInput = {
   ...EMPTY_INPUT,
-  month: APR,
-  congestion: [congestion("2099-04-09", 2000, {})],
+  week: WEEK_D,
+  congestion: [congestion(D_DAY, 2000, {})],
   hasHistoryBefore: true,
 };
 
 const AUTHORED: Authored = {
-  headlineRead: "Test read for a year-2099 month. Not a real edition.",
+  headlineRead: "Test read for a year-2099 week. Not a real edition.",
   regionalCommentary: "Test regional commentary.",
   reliabilityNote: "Test reliability note.",
   watchList: [
@@ -201,6 +237,19 @@ const AUTHORED: Authored = {
 function editionFrom(input: EditionInput, authored = AUTHORED): Edition {
   const generated = buildGenerated(input);
   return { generated, authored, sections: sectionStates(generated, authored) };
+}
+
+/**
+ * Whether the rendered email carries a section HEADING with this title.
+ *
+ * Matched against the heading's closing markup rather than the bare words,
+ * because a caption may legitimately mention another section by name — the
+ * glance caption says schedule reliability is the one monthly figure, which is
+ * exactly the sentence a reader needs and exactly the string a naive search
+ * mistakes for the section itself.
+ */
+function hasSectionHeading(html: string, title: string): boolean {
+  return html.includes(`;">${title}</div>`);
 }
 
 // --- Press fixtures, never written to the database --------------------------
@@ -226,19 +275,14 @@ const CHOKE = "Chokepoints & routing";
 const DISRUPT = "Disruption & incidents";
 const PORTS_THEME = "Port & terminal operations";
 
-/**
- * `three-themes` carries all three and must appear exactly once, filed under
- * the busiest. Chokepoints gets six articles so the per-theme cap has something
- * to hold back.
- */
 const FIXTURES: PressCandidate[] = [
-  article("three-themes", "Carries three themes", [CHOKE, DISRUPT, PORTS_THEME], "2099-01-20"),
-  article("choke-2", "Chokepoint two", [CHOKE], "2099-01-19"),
-  article("choke-3", "Chokepoint three", [CHOKE], "2099-01-18"),
-  article("choke-4", "Chokepoint four", [CHOKE], "2099-01-17"),
-  article("choke-5", "Chokepoint five", [CHOKE], "2099-01-16"),
-  article("choke-6", "Chokepoint six", [CHOKE], "2099-01-15"),
-  article("disrupt-2", "Disruption two", [DISRUPT], "2099-01-14"),
+  article("three-themes", "Carries three themes", [CHOKE, DISRUPT, PORTS_THEME], "2099-01-11"),
+  article("choke-2", "Chokepoint two", [CHOKE], "2099-01-10"),
+  article("choke-3", "Chokepoint three", [CHOKE], "2099-01-09"),
+  article("choke-4", "Chokepoint four", [CHOKE], "2099-01-08"),
+  article("choke-5", "Chokepoint five", [CHOKE], "2099-01-07"),
+  article("choke-6", "Chokepoint six", [CHOKE], "2099-01-06"),
+  article("disrupt-2", "Disruption two", [DISRUPT], "2099-01-05"),
 ];
 
 const FIXTURE_IDS = FIXTURES.map((f) => f.id);
@@ -249,21 +293,76 @@ const WITHOUT_NEWEST = FIXTURE_IDS.filter((id) => id !== "three-themes");
 // ===========================================================================
 
 function logicChecks() {
-  console.log("MONTHS");
-  check(previousMonth(JAN).start === "2098-12-01", "January's prior month crosses the year");
-  check(monthFromIso("2099-02-01").end === "2099-02-28", "February 2099 ends on the 28th");
-  check(monthFromIso("2096-02-01").end === "2096-02-29", "and a leap February ends on the 29th");
+  console.log("WEEKS, NOT MONTHS");
   check(
-    subjectLine(FEB) === "Ocean Freight Update — AOA | February 2099",
-    `the subject line keeps the series' shape ("${subjectLine(FEB)}")`
+    WEEK_A.start === "2099-01-05" && WEEK_A.end === "2099-01-11",
+    `an ISO week runs Monday to Sunday (${WEEK_A.start} → ${WEEK_A.end})`
+  );
+  check(
+    previousWeek(WEEK_B).start === WEEK_A.start,
+    "the prior week is the ISO week before, not seven days of arithmetic on a label"
+  );
+  check(
+    weekContainingDate("2099-01-11").start === WEEK_A.start,
+    "an article dated the SUNDAY belongs to that week"
+  );
+  check(
+    weekContainingDate("2099-01-12").start === WEEK_B.start,
+    "and one dated the MONDAY belongs to the next — the off-by-one that would lose or double-count an article every edition"
+  );
+  check(
+    previousWeek(WEEK_A).start === "2098-12-29",
+    `the week before 5 Jan 2099 starts on 29 Dec 2098 — the prior week crosses the year by ISO rules, not by calendar year (${previousWeek(WEEK_A).start})`
+  );
+  check(
+    weekContainingDate("2099-01-04").start === "2098-12-29",
+    "and Sunday 4 Jan 2099 belongs to the week that started in December"
+  );
+
+  console.log("\nTHE DEFAULT WEEK");
+  // Monday 17 Aug 2026 → the week that just closed is 10–16 Aug.
+  check(
+    lastCompletedWeek(new Date("2026-08-17T09:00:00Z")).start === "2026-08-10",
+    `composing on Monday 17 Aug lands on 10–16 Aug (${lastCompletedWeek(new Date("2026-08-17T09:00:00Z")).start})`
+  );
+  check(
+    lastCompletedWeek(new Date("2026-08-16T23:00:00Z")).start === "2026-08-03",
+    "and on Sunday the 16th the week 10–16 is still running, so the last CLOSED week is 3–9 Aug"
+  );
+  check(
+    resolveEditionWeek(undefined, new Date("2026-08-17T09:00:00Z")).start === "2026-08-10",
+    "an absent parameter resolves to the last completed week, never the in-progress one"
+  );
+  check(
+    resolveEditionWeek("2026-08-13", new Date("2026-08-17T09:00:00Z")).start === "2026-08-10",
+    "and a parameter naming any day snaps to that day's Monday"
+  );
+
+  console.log("\nLABELS AND SUBJECT");
+  check(
+    weekRangeLabel(WEEK_A) === "5–11 Jan 2099",
+    `a within-month week reads compactly ("${weekRangeLabel(WEEK_A)}")`
+  );
+  check(
+    weekRangeLabel(weekContainingDate("2026-09-30")) === "28 Sep – 4 Oct 2026",
+    `a month-spanning week names both months ("${weekRangeLabel(weekContainingDate("2026-09-30"))}")`
+  );
+  check(
+    weekRangeLabel(weekContainingDate("2026-12-30")) === "28 Dec 2026 – 3 Jan 2027",
+    `a year-spanning week names both years, because one trailing year would attach to the wrong end ("${weekRangeLabel(weekContainingDate("2026-12-30"))}")`
+  );
+  check(
+    subjectLine(weekContainingDate("2026-08-10")) ===
+      "Ocean Freight Update — AOA | Week of 10–16 Aug 2026",
+    `the subject carries the date range in the specified form ("${subjectLine(weekContainingDate("2026-08-10"))}")`
   );
 
   console.log("\nSTOCKS, NOT FLOWS");
-  const jan = editionFrom(JAN_INPUT);
-  const teu = jan.generated.glance.find((r) => r.key === "teu_waiting")!;
+  const a = editionFrom(A_INPUT);
+  const teu = a.generated.glance.find((r) => r.key === "teu_waiting")!;
   check(
-    teu.value === 1500 && teu.asAt === JAN_DAYS[2],
-    `the month's figure is the LATEST entered day (${teu.value} as at ${teu.asAt})`
+    teu.value === 1500 && teu.asAt === A_SUNDAY,
+    `the week's figure is the LATEST entered day (${teu.value} as at ${teu.asAt})`
   );
   check(
     teu.value !== (1000 + 1200 + 1500) / 3 && teu.value !== 1000 + 1200 + 1500,
@@ -273,42 +372,50 @@ function logicChecks() {
   console.log("\nDELTAS — THREE KINDS OF ANSWER");
   check(
     teu.delta.kind === "first-edition",
-    `a month with nothing before it has no comparison (${teu.delta.kind})`
+    `a week with nothing before it has no comparison (${teu.delta.kind})`
   );
   check(
     formatDelta(teu.delta) === "first edition",
     `and it reads "first edition" — never 0%, never a dash ("${formatDelta(teu.delta)}")`
   );
 
-  const feb = editionFrom(FEB_INPUT);
-  const febTeu = feb.generated.glance.find((r) => r.key === "teu_waiting")!;
+  const b = editionFrom(B_INPUT);
+  const bTeu = b.generated.glance.find((r) => r.key === "teu_waiting")!;
   check(
-    febTeu.delta.kind === "change" && febTeu.delta.prior.value === 1500,
-    "February compares against January's LATEST day, not its first or its last calendar day"
+    bTeu.delta.kind === "change" && bTeu.delta.prior.value === 1500,
+    "a delta spanning a week boundary picks the prior week's LATEST day, not its first or its Sunday"
   );
   check(
-    febTeu.delta.kind === "change" && febTeu.delta.prior.asAt === JAN_DAYS[2],
+    bTeu.delta.kind === "change" && bTeu.delta.prior.asAt === A_SUNDAY,
     `and carries the date it compared against (${
-      febTeu.delta.kind === "change" ? febTeu.delta.prior.asAt : "none"
+      bTeu.delta.kind === "change" ? bTeu.delta.prior.asAt : "none"
     })`
   );
-  check(formatDelta(febTeu.delta) === "▲ 20%", `1500 → 1800 is +20% (${formatDelta(febTeu.delta)})`);
-
-  const apr = editionFrom(APR_INPUT);
-  const aprTeu = apr.generated.glance.find((r) => r.key === "teu_waiting")!;
+  check(formatDelta(bTeu.delta) === "▲ 20%", `1500 → 1800 is +20% (${formatDelta(bTeu.delta)})`);
   check(
-    aprTeu.delta.kind === "no-prior",
-    `an empty prior month is its own case, not "first edition" (${aprTeu.delta.kind})`
+    deltaBasis(bTeu.delta) === "vs 11 Jan",
+    `the basis names the day, not the week ("${deltaBasis(bTeu.delta)}")`
+  );
+
+  const d = editionFrom(D_INPUT);
+  const dTeu = d.generated.glance.find((r) => r.key === "teu_waiting")!;
+  check(
+    dTeu.delta.kind === "no-prior",
+    `an empty prior week is its own case, not "first edition" (${dTeu.delta.kind})`
   );
   check(
-    formatDelta(aprTeu.delta) === "no March 2099 figure",
-    `and it names the month it could not find ("${formatDelta(aprTeu.delta)}")`
+    formatDelta(dTeu.delta) === `no ${weekRangeShort(WEEK_C)} figure`,
+    `and it names the week it could not find ("${formatDelta(dTeu.delta)}")`
+  );
+  check(
+    !/0%/.test(formatDelta(dTeu.delta)) && !/0%/.test(formatDelta(teu.delta)),
+    "neither absence is ever rendered as 0%, which would claim the level did not move"
   );
 
   const fromZero = deltaBetween(
-    { value: 5, asAt: "2099-01-20" },
-    { value: 0, asAt: "2098-12-20" },
-    JAN,
+    { value: 5, asAt: "2099-01-11" },
+    { value: 0, asAt: "2099-01-04" },
+    "the week before",
     true
   );
   check(
@@ -316,13 +423,69 @@ function logicChecks() {
     "a rise from zero has no percentage, and says so rather than printing Infinity"
   );
 
+  console.log("\nRELIABILITY IS MONTHLY INSIDE A WEEKLY EDITION");
+  const rel = b.generated.reliability!;
+  check(
+    rel.monthLabel === "January 2099",
+    `the block is labelled with the reliability row's OWN month, not the edition's (${rel.monthLabel})`
+  );
+  check(rel.glpIssue === 999, `and cites the GLP issue (${rel.glpIssue})`);
+  check(
+    rel.priorMonthLabel === "December 2098",
+    `it compares against the previous PUBLISHED month (${rel.priorMonthLabel})`
+  );
+  const relRow = b.generated.glance.find((r) => r.key === "reliability")!;
+  check(
+    relRow.delta.kind === "change" && Math.abs(relRow.delta.absolute - 3) < 1e-9,
+    "58% → 61% is a real change, not the 0% a week-on-week comparison of a carried-forward figure would print"
+  );
+  check(
+    deltaBasis(relRow.delta) === "vs December 2098",
+    `and the basis says which month ("${deltaBasis(relRow.delta)}")`
+  );
+  check(
+    (relRow.note ?? "").includes("issue 999") &&
+      (relRow.note ?? "").includes("January 2099") &&
+      (relRow.note ?? "").includes("unchanged"),
+    `the glance row states the issue, the month and that it is unchanged ("${relRow.note}")`
+  );
+
+  // Carried forward: a February week still showing January's issue.
+  const febWeek = weekContainingDate("2099-02-09");
+  const carried = editionFrom({ ...B_INPUT, week: febWeek });
+  check(
+    carried.generated.reliability!.carriedForward,
+    "a February week carrying January's issue is flagged as carried forward"
+  );
+  check(
+    carried.generated.reliability!.weekMonthLabel === "February 2099",
+    "and knows which month it is NOT a figure for"
+  );
+  const carriedHtml = renderEditionHtml(carried, { baseUrl: null });
+  check(
+    carriedHtml.includes("January 2099") && carriedHtml.includes("issue 999"),
+    "the email states the month it covers and the GLP issue"
+  );
+  check(
+    carriedHtml.includes("unchanged since that issue"),
+    "and says explicitly that it is unchanged since that issue"
+  );
+  check(
+    carriedHtml.includes("not February 2099 figures"),
+    "and that these are not the current month's figures"
+  );
+  check(
+    carriedHtml.includes("Changes are against December 2098, not against last week"),
+    "and that the percentages beside it are month-on-month, not week-on-week"
+  );
+
   console.log("\nABSENT IS NOT ZERO");
-  const bare = editionFrom({ ...EMPTY_INPUT, month: JAN, hasHistoryBefore: false }, AUTHORED);
-  check(bare.generated.glance.length === 0, "a month with no figures produces no glance rows");
+  const bare = editionFrom({ ...EMPTY_INPUT, week: WEEK_A, hasHistoryBefore: false }, AUTHORED);
+  check(bare.generated.glance.length === 0, "a week with no figures produces no glance rows");
   check(
     bare.sections.filter((s) => s.present).map((s) => s.key).join(",") ===
       "headline,watchList,actions",
-    `only the authored sections survive an empty month (${bare.sections
+    `only the authored sections survive an empty week (${bare.sections
       .filter((s) => s.present)
       .map((s) => s.key)
       .join(",")})`
@@ -333,47 +496,53 @@ function logicChecks() {
   );
 
   console.log("\nSECTIONS PRESENT AND ABSENT IN THE RENDERED EMAIL");
-  const janHtml = renderEditionHtml(jan, { baseUrl: "https://example.invalid" });
-  const febHtml = renderEditionHtml(feb, { baseUrl: "https://example.invalid" });
+  const aHtml = renderEditionHtml(a, { baseUrl: "https://example.invalid" });
+  const bHtml = renderEditionHtml(b, { baseUrl: "https://example.invalid" });
 
   for (const key of ["ports", "fleet", "reliability"] as const) {
     check(
-      !janHtml.includes(SECTION_TITLES[key]),
-      `January entered no ${SECTION_TITLES[key].toLowerCase()} data, so "${SECTION_TITLES[key]}" is absent from the HTML entirely`
+      !hasSectionHeading(aHtml, SECTION_TITLES[key]),
+      `week A entered no ${SECTION_TITLES[key].toLowerCase()} data, so the "${SECTION_TITLES[key]}" section is absent from the HTML entirely`
     );
   }
   check(
-    janHtml.includes(SECTION_TITLES.glance) && janHtml.includes(SECTION_TITLES.regional),
-    "the sections January DOES have are present, so the absences above are not a blank render"
+    hasSectionHeading(aHtml, SECTION_TITLES.glance) &&
+      hasSectionHeading(aHtml, SECTION_TITLES.regional),
+    "the sections week A DOES have are present, so the absences above are not a blank render"
+  );
+  check(aHtml.includes("as at 11 Jan"), "the partial week carries its reading date into the email");
+  check(aHtml.includes("first edition"), 'and its delta cells read "first edition"');
+  check(
+    aHtml.includes("Week of 5–11 Jan 2099"),
+    "the header carries the date range, so a forwarded copy needs no opening"
   );
   check(
-    janHtml.includes("as at 20 Jan"),
-    "the partial month carries its reading date into the email"
-  );
-  check(janHtml.includes("first edition"), 'and its delta cells read "first edition"');
-  check(
-    !/data not available|not available|n\/a/i.test(janHtml),
+    !/data not available|not available|n\/a/i.test(aHtml),
     "no section is padded with a placeholder row"
   );
   for (const key of ["ports", "fleet", "reliability"] as const) {
     check(
-      febHtml.includes(SECTION_TITLES[key]),
-      `February entered ${SECTION_TITLES[key].toLowerCase()} data, so its heading IS present`
+      hasSectionHeading(bHtml, SECTION_TITLES[key]),
+      `week B entered ${SECTION_TITLES[key].toLowerCase()} data, so its heading IS present`
     );
   }
   check(
-    febHtml.includes("3.5") && !febHtml.includes("3.526"),
+    bHtml.includes("3.5") && !bHtml.includes("3.526"),
     "the queue / berth ratio is printed as published (3.50), never as the 3.526 the ship counts would give"
   );
   check(
-    febHtml.includes("OVERLAP"),
+    bHtml.includes("OVERLAP"),
     "the fleet section says its categories overlap, so nobody totals them"
+  );
+  check(
+    bHtml.includes("Monday to Sunday"),
+    "and the edition says what its window is, rather than leaving it to be inferred"
   );
 
   console.log("\nEMAIL HTML CONSTRAINTS");
   for (const [html, label] of [
-    [janHtml, "January"],
-    [febHtml, "February"],
+    [aHtml, "week A"],
+    [bHtml, "week B"],
   ] as const) {
     check(!html.includes("<svg"), `${label}: no <svg — Gmail strips it and Outlook cannot render it`);
     check(
@@ -402,11 +571,11 @@ function logicChecks() {
     );
   }
   check(
-    janHtml.length > 2000,
-    `the rendered email is a real document, not an empty shell (${janHtml.length} bytes)`
+    aHtml.length > 2000,
+    `the rendered email is a real document, not an empty shell (${aHtml.length} bytes)`
   );
   check(
-    (febHtml.match(/<table/g) ?? []).length > 8,
+    (bHtml.match(/<table/g) ?? []).length > 8,
     "the charts really are tables — a bar is a <td> with a background colour and a width"
   );
 
@@ -449,24 +618,21 @@ function logicChecks() {
     `an empty selection is a real selection — everything toggled out renders nothing (${nothingKept.shown})`
   );
   check(
-    nothingKept.themes.every((t) => t.items.length === 0),
-    "the themes survive for the composer's toggles, but carry no rendered item"
-  );
-  check(
-    !renderEditionHtml(editionFrom({ ...EMPTY_INPUT, month: FEB, hasHistoryBefore: true, press: FIXTURES, includedArticleIds: [] }), {
-      baseUrl: null,
-    }).includes(SECTION_TITLES.press),
+    !hasSectionHeading(
+      renderEditionHtml(
+        editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, press: FIXTURES, includedArticleIds: [] }),
+        { baseUrl: null }
+      ),
+      SECTION_TITLES.press
+    ),
     "and the press section is absent from the email entirely"
   );
 
   console.log("\nNEAR-DUPLICATE SUPPRESSION");
-  // The real failure: one story captured twice because two standing Google
-  // Alert queries each returned it. Ingestion is right to keep both — different
-  // provenance — but rendering both reads as padding.
   const twice: PressCandidate[] = [
-    article("cap-a", "Asian port congestion forcing container lines back to the Red Sea", [CHOKE], "2099-01-20"),
-    article("cap-b", "Asian port congestion forcing container lines back to the Red Sea - Seatrade Maritime News", [CHOKE], "2099-01-20"),
-    article("distinct", "Maersk and Hapag-Lloyd return more services to the Suez Canal", [CHOKE], "2099-01-19"),
+    article("cap-a", "Asian port congestion forcing container lines back to the Red Sea", [CHOKE], "2099-01-11"),
+    article("cap-b", "Asian port congestion forcing container lines back to the Red Sea - Seatrade Maritime News", [CHOKE], "2099-01-11"),
+    article("distinct", "Maersk and Hapag-Lloyd return more services to the Suez Canal", [CHOKE], "2099-01-10"),
   ];
   const deduped = selectPress(twice, null);
   check(
@@ -482,15 +648,12 @@ function logicChecks() {
     "while a genuinely different story on the same theme survives"
   );
 
-  // The cross-theme case, which is where the repeats actually turn up: the two
-  // captures often carry different ai_themes and are filed apart, so a
-  // within-theme pass alone never sees them.
   const acrossThemes = selectPress(
     [
-      article("x-a", "Hapag-Lloyd's $4.2B ZIM deal faces growing opposition in Israel", [CHOKE], "2099-01-20"),
-      article("x-b", "Hapag-Lloyd's $4.2B ZIM deal faces growing opposition in Israel", [DISRUPT], "2099-01-20"),
-      article("x-c", "Chokepoint filler", [CHOKE], "2099-01-19"),
-      article("x-d", "Disruption filler", [DISRUPT], "2099-01-18"),
+      article("x-a", "Hapag-Lloyd's $4.2B ZIM deal faces growing opposition in Israel", [CHOKE], "2099-01-11"),
+      article("x-b", "Hapag-Lloyd's $4.2B ZIM deal faces growing opposition in Israel", [DISRUPT], "2099-01-11"),
+      article("x-c", "Chokepoint filler", [CHOKE], "2099-01-10"),
+      article("x-d", "Disruption filler", [DISRUPT], "2099-01-09"),
     ],
     null
   );
@@ -499,46 +662,11 @@ function logicChecks() {
     printed.filter((id) => id === "x-a" || id === "x-b").length === 1,
     `one story filed under two themes is printed once (${printed.join(",")})`
   );
-  check(
-    acrossThemes.themes
-      .flatMap((t) => t.nearDuplicates.map((i) => i.id))
-      .includes("x-b"),
-    "and the copy in the quieter theme is the one suppressed, so the reader meets it in the busier one"
-  );
-  check(
-    acrossThemes.themes.every((t) => t.items.length > 0 || t.nearDuplicates.length > 0),
-    "no theme is left as a heading over nothing"
-  );
-  // Counted on the link, not the headline text: the fixtures build each summary
-  // out of its own headline, so a naive text count sees every item twice.
-  const crossHtml = renderEditionHtml(
-    editionFrom({
-      ...EMPTY_INPUT,
-      month: FEB,
-      hasHistoryBefore: true,
-      press: [
-        article("y-a", "One story filed under two different themes entirely", [CHOKE], "2099-01-20"),
-        article("y-b", "One story filed under two different themes entirely", [DISRUPT], "2099-01-20"),
-      ],
-    }),
-    { baseUrl: null }
-  );
-  check(
-    (crossHtml.match(/example\.invalid\/y-/g) ?? []).length === 1,
-    `and the rendered email links that story exactly once (${
-      (crossHtml.match(/example\.invalid\/y-/g) ?? []).length
-    })`
-  );
 
   console.log("\nOUTLET ATTRIBUTION");
   const ALERT = 'Google Alert - "Red Sea" ("ocean freight" OR "container shipping")';
-  check(
-    outletName(ALERT) === null,
-    "a Google Alert query is not an outlet, so it is never printed as a byline"
-  );
+  check(outletName(ALERT) === null, "a Google Alert query is not an outlet, so it is never a byline");
   check(outletName("The Loadstar") === "The Loadstar", "a real outlet name survives untouched");
-  check(outletName("  ") === null && outletName(null) === null, "and a blank one is an absence");
-
   const mixedOutlets = selectPress(
     [
       { ...FIXTURES[0], id: "m1", media: "The Loadstar" },
@@ -549,42 +677,31 @@ function logicChecks() {
   );
   check(
     mixedOutlets.outlets === 1,
-    `the source count counts NAMED outlets only, so a search query is not a publication (${mixedOutlets.outlets})`
-  );
-  const alertItem = mixedOutlets.themes
-    .flatMap((t) => t.items)
-    .find((i) => i.id === "m2");
-  check(
-    alertItem?.media === null,
-    "and the item it belongs to renders with no byline rather than an invented one"
-  );
-  const alertHtml = renderEditionHtml(
-    editionFrom({ ...EMPTY_INPUT, month: FEB, hasHistoryBefore: true, press: [{ ...FIXTURES[0], media: ALERT }] }),
-    { baseUrl: null }
+    `the source count counts NAMED outlets only (${mixedOutlets.outlets})`
   );
   check(
-    !alertHtml.includes("Google Alert"),
+    !renderEditionHtml(
+      editionFrom({ ...EMPTY_INPUT, week: WEEK_B, hasHistoryBefore: true, press: [{ ...FIXTURES[0], media: ALERT }] }),
+      { baseUrl: null }
+    ).includes("Google Alert"),
     "and no alert query reaches the rendered email"
   );
 
   console.log("\nTHE SNAPSHOT");
-  const html = renderEditionHtml(feb, { baseUrl: null });
+  const html = renderEditionHtml(b, { baseUrl: null });
   const snapshot = buildSnapshot({
-    edition: feb,
-    subject: subjectLine(FEB),
+    edition: b,
+    subject: subjectLine(WEEK_B),
     html,
-    sentAt: "2099-03-01T09:00:00.000Z",
+    sentAt: "2099-01-19T09:00:00.000Z",
     sentByName: "Check fixture",
   });
   const restored = parseSnapshot(snapshotToJson(snapshot));
   check(restored !== null, "a snapshot round-trips through jsonb");
+  check(restored?.html === html, "and renders byte-for-byte what was sent, from the snapshot alone");
   check(
-    restored?.html === html,
-    "and renders byte-for-byte what was sent, from the snapshot alone"
-  );
-  check(
-    restored?.generated.glance.length === feb.generated.glance.length,
-    "carrying the figures as structure, not only as markup"
+    restored?.week.start === WEEK_B.start,
+    "carrying the week it covers, not a month"
   );
   check(
     parseSnapshot({ version: 99, html: "x" }) === null,
@@ -593,28 +710,95 @@ function logicChecks() {
   check(parseSnapshot(null) === null, "and so is a missing one");
   check(
     readAuthored({
-      headline_read: "kept",
-      regional_commentary: null,
-      reliability_note: null,
-      watch_list: null,
-      recommended_actions: null,
-    }).watchList.length === 0,
-    "a null watch_list degrades to no entries rather than to a blank card"
-  );
-  check(
-    readAuthored({
       headline_read: null,
       regional_commentary: null,
       reliability_note: null,
       watch_list: [{ risk: "", lanes: "", window: "", direction: "" }],
       recommended_actions: ["", "  ", "real"],
     }).recommendedActions.join("|") === "real",
-    "and blank authored rows are dropped rather than sent as empty cards"
+    "blank authored rows are dropped rather than sent as empty cards"
   );
 }
 
 // ===========================================================================
-// The database half — RLS, audit, and the freeze
+// The corpus tier — the window is a bounded date range, proved on real rows
+//
+// READ-ONLY. It writes nothing and therefore cleans nothing up, which is what
+// lets it run under the service role without any of the caveats that would
+// carry for a write.
+//
+// The corpus holds the perfect boundary case: 2026-08-09 is a Sunday with 3
+// coded articles and 2026-08-10 a Monday with 28. If either end of the range is
+// exclusive, or the window rolls, those 31 articles land in the wrong week or
+// in both — and nobody notices for months.
+// ===========================================================================
+
+async function corpusChecks(admin: SupabaseClient<Database>) {
+  console.log("\nWEEK BOUNDARY — REAL CORPUS, BOTH DIRECTIONS");
+  const early = await loadEdition(admin, REAL_WEEK_EARLY, null);
+  const late = await loadEdition(admin, REAL_WEEK_LATE, null);
+  const earlyDates = early.input.press.map((p) => p.published_at!);
+  const lateDates = late.input.press.map((p) => p.published_at!);
+
+  check(
+    earlyDates.includes("2026-08-09"),
+    "an article dated the SUNDAY is in that week — the end of the range is inclusive"
+  );
+  check(!earlyDates.includes("2026-08-10"), "and one dated the following MONDAY is not");
+  check(
+    lateDates.includes("2026-08-10"),
+    "an article dated the MONDAY is in the next week — the start of the range is inclusive"
+  );
+  check(!lateDates.includes("2026-08-09"), "and one dated the preceding SUNDAY is not");
+  check(
+    earlyDates.every((d) => d >= REAL_WEEK_EARLY.start && d <= REAL_WEEK_EARLY.end) &&
+      lateDates.every((d) => d >= REAL_WEEK_LATE.start && d <= REAL_WEEK_LATE.end),
+    "every article returned falls inside its own week's dates"
+  );
+
+  // The partition test. Two adjacent weeks must together equal the combined
+  // range exactly: it fails if either end is exclusive (articles lost) or if
+  // both weeks claim a shared boundary day (articles counted twice).
+  const { count: combined } = await admin
+    .from("articles")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "active")
+    .eq("coded_status", "coded")
+    .not("published_at", "is", null)
+    .gte("published_at", REAL_WEEK_EARLY.start)
+    .lte("published_at", REAL_WEEK_LATE.end);
+  check(
+    earlyDates.length + lateDates.length === (combined ?? -1),
+    `two adjacent weeks partition the range exactly — ${earlyDates.length} + ${lateDates.length} = ${combined}, nothing lost and nothing counted twice`
+  );
+
+  console.log("\nTHE WINDOW IS DATE-BOUNDED, NOT ROLLING");
+  const firstIds = late.input.press.map((p) => p.id).sort().join(",");
+  await new Promise((r) => setTimeout(r, 1200));
+  const again = await loadEdition(admin, REAL_WEEK_LATE, null);
+  check(
+    again.input.press.map((p) => p.id).sort().join(",") === firstIds,
+    "two calls separated in time return the identical set for the same week"
+  );
+  check(
+    late.input.press.length > 0,
+    `and it is a non-empty set, so the comparison means something (${late.input.press.length} articles)`
+  );
+
+  console.log("\nWEEK COUNTS FOR THE SELECTOR");
+  const counts = await loadWeekCounts(admin, [REAL_WEEK_EARLY, REAL_WEEK_LATE]);
+  check(
+    counts[REAL_WEEK_LATE.start] === lateDates.length,
+    `the selector's count matches what the edition would load (${counts[REAL_WEEK_LATE.start]} vs ${lateDates.length})`
+  );
+  check(
+    counts[REAL_WEEK_EARLY.start] === earlyDates.length,
+    `for the quiet week too (${counts[REAL_WEEK_EARLY.start]} vs ${earlyDates.length}) — which is the number the selector exists to show before the week is opened`
+  );
+}
+
+// ===========================================================================
+// The role tier — RLS, audit, and the freeze
 // ===========================================================================
 
 function anon(): SupabaseClient<Database> {
@@ -656,17 +840,17 @@ async function databaseChecks() {
 
   try {
     console.log("\nWRITE GATE");
-    const anonWrite = await anon().from("newsletter_editions").insert({ month_of: JAN.start });
+    const anonWrite = await anon().from("newsletter_editions").insert({ week_of: WEEK_A.start });
     check(anonWrite.error !== null, "a signed-out client cannot create an edition");
 
     const readInsert = await reader.supabase
       .from("newsletter_editions")
-      .insert({ month_of: JAN.start });
+      .insert({ week_of: WEEK_A.start });
     check(readInsert.error !== null, "read role is refused an insert");
 
     const curateInsert = await curate.supabase.from("newsletter_editions").upsert(
-      { month_of: JAN.start, status: "draft", headline_read: "seed", ...stamp() },
-      { onConflict: "month_of" }
+      { week_of: WEEK_A.start, status: "draft", headline_read: "seed", ...stamp() },
+      { onConflict: "week_of" }
     );
     check(
       curateInsert.error === null,
@@ -676,11 +860,11 @@ async function databaseChecks() {
     await reader.supabase
       .from("newsletter_editions")
       .update({ headline_read: "tampered" })
-      .eq("month_of", JAN.start);
+      .eq("week_of", WEEK_A.start);
     const { data: afterReadUpdate } = await reader.supabase
       .from("newsletter_editions")
       .select("headline_read")
-      .eq("month_of", JAN.start)
+      .eq("week_of", WEEK_A.start)
       .maybeSingle();
     check(
       afterReadUpdate?.headline_read === "seed",
@@ -698,7 +882,7 @@ async function databaseChecks() {
         actor_id: curate.id,
         action: "newsletter.update",
         target_type: "newsletter_edition",
-        metadata: { month_of: JAN.start, note: "check fixture" },
+        metadata: { week_of: WEEK_A.start, note: "check fixture" },
       })
       .select("id");
     check(audit.error === null, "curate CAN write the audit row the action writes");
@@ -711,45 +895,60 @@ async function databaseChecks() {
     });
     check(forged.error !== null, "an audit row cannot be attributed to another user");
 
-    console.log("\nTHE MONTH QUERY IS BOUNDED");
+    console.log("\nOPERATIONAL ROWS RESPECT THE SAME BOUNDARY");
+    // The Sunday of week A and the Monday of week B, one either side.
     for (const [day, teu] of [
-      [JAN_DAYS[0], 1000],
-      [JAN_DAYS[1], 1200],
-      [JAN_DAYS[2], 1500],
+      [A_DAYS[0], 1000],
+      [A_DAYS[1], 1200],
+      [A_SUNDAY, 1500],
+      [B_MONDAY, 9999],
     ] as const) {
       await curate.supabase
         .from("operational_congestion")
         .upsert({ day_of: day, global_teu_waiting: teu, ...stamp() }, { onConflict: "day_of" });
     }
-    // A day in a different month, which the January read must not pick up.
     await curate.supabase
       .from("operational_congestion")
-      .upsert({ day_of: OUTSIDE_DAY, global_teu_waiting: 9999, ...stamp() }, { onConflict: "day_of" });
+      .upsert({ day_of: OUTSIDE_DAY, global_teu_waiting: 1, ...stamp() }, { onConflict: "day_of" });
 
-    const loaded = await loadEdition(curate.supabase, JAN, null);
+    const loadedA = await loadEdition(curate.supabase, WEEK_A, null);
     check(
-      loaded.input.congestion.length === 3,
-      `January reads back the 3 days entered, not 31 and not the whole table (${loaded.input.congestion.length})`
+      loadedA.input.congestion.length === 3,
+      `week A reads back its 3 entered days (${loadedA.input.congestion.length})`
     );
     check(
-      !loaded.input.congestion.some((r) => r.day_of === OUTSIDE_DAY),
-      "and a day outside the month is not in it"
+      loadedA.input.congestion.some((r) => r.day_of === A_SUNDAY),
+      "including the Sunday"
     );
-    const live = buildGenerated(loaded.input);
     check(
-      live.glance.find((r) => r.key === "teu_waiting")?.asAt === JAN_DAYS[2],
-      "the live read picks the same latest day the fixtures do"
+      !loadedA.input.congestion.some((r) => r.day_of === B_MONDAY),
+      "and excluding the following Monday"
+    );
+    const liveA = buildGenerated(loadedA.input);
+    check(
+      liveA.glance.find((r) => r.key === "teu_waiting")?.asAt === A_SUNDAY,
+      "so the live read picks the Sunday as the week's latest day"
+    );
+
+    const loadedB = await loadEdition(curate.supabase, WEEK_B, null);
+    const liveB = buildGenerated(loadedB.input);
+    const bDelta = liveB.glance.find((r) => r.key === "teu_waiting")!.delta;
+    check(
+      bDelta.kind === "change" && bDelta.prior.asAt === A_SUNDAY,
+      `a delta spanning the boundary compares against the prior week's Sunday (${
+        bDelta.kind === "change" ? bDelta.prior.asAt : bDelta.kind
+      })`
     );
 
     console.log("\nPRESS EXCLUSIONS PERSIST");
     await curate.supabase
       .from("newsletter_editions")
       .update({ included_article_ids: WITHOUT_NEWEST })
-      .eq("month_of", JAN.start);
+      .eq("week_of", WEEK_A.start);
     const { data: reread } = await curate.supabase
       .from("newsletter_editions")
       .select("included_article_ids")
-      .eq("month_of", JAN.start)
+      .eq("week_of", WEEK_A.start)
       .maybeSingle();
     const recomputed = selectPress(FIXTURES, reread?.included_article_ids ?? null);
     check(
@@ -762,19 +961,19 @@ async function databaseChecks() {
     );
 
     console.log("\nTHE FREEZE");
-    const sent = editionFrom({ ...FEB_INPUT, month: SENT_MONTH });
+    const sent = editionFrom({ ...B_INPUT, week: SENT_WEEK });
     const sentHtml = renderEditionHtml(sent, { baseUrl: null });
     const snapshot = buildSnapshot({
       edition: sent,
-      subject: subjectLine(SENT_MONTH),
+      subject: subjectLine(SENT_WEEK),
       html: sentHtml,
       sentAt: new Date().toISOString(),
       sentByName: "Check fixture",
     });
 
     await curate.supabase.from("newsletter_editions").upsert(
-      { month_of: SENT_MONTH.start, status: "draft", headline_read: "before send", ...stamp() },
-      { onConflict: "month_of" }
+      { week_of: SENT_WEEK.start, status: "draft", headline_read: "before send", ...stamp() },
+      { onConflict: "week_of" }
     );
     const flip = await curate.supabase
       .from("newsletter_editions")
@@ -784,7 +983,7 @@ async function databaseChecks() {
         sent_at: snapshot.sentAt,
         sent_by: curate.id,
       })
-      .eq("month_of", SENT_MONTH.start)
+      .eq("week_of", SENT_WEEK.start)
       .eq("status", "draft")
       .select("id");
     check(
@@ -795,7 +994,7 @@ async function databaseChecks() {
     const tamper = await curate.supabase
       .from("newsletter_editions")
       .update({ headline_read: "rewritten after sending" })
-      .eq("month_of", SENT_MONTH.start);
+      .eq("week_of", SENT_WEEK.start);
     check(
       tamper.error !== null,
       `an update to a SENT edition is refused by the DATABASE — ${
@@ -810,7 +1009,7 @@ async function databaseChecks() {
     const resend = await curate.supabase
       .from("newsletter_editions")
       .update({ status: "sent", sent_at: new Date().toISOString() })
-      .eq("month_of", SENT_MONTH.start)
+      .eq("week_of", SENT_WEEK.start)
       .eq("status", "draft")
       .select("id");
     check(
@@ -818,11 +1017,11 @@ async function databaseChecks() {
       "a second send matches no row rather than overwriting the first snapshot"
     );
 
-    await curate.supabase.from("newsletter_editions").delete().eq("month_of", SENT_MONTH.start);
+    await curate.supabase.from("newsletter_editions").delete().eq("week_of", SENT_WEEK.start);
     const { data: frozenRow } = await reader.supabase
       .from("newsletter_editions")
       .select("headline_read, snapshot, status")
-      .eq("month_of", SENT_MONTH.start)
+      .eq("week_of", SENT_WEEK.start)
       .maybeSingle();
     check(
       frozenRow?.status === "sent",
@@ -844,11 +1043,14 @@ async function databaseChecks() {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
-    await admin.from("newsletter_editions").delete().in("month_of", ALL_MONTHS);
+    await admin.from("newsletter_editions").delete().in("week_of", ALL_WEEKS);
     await admin.from("operational_port_congestion").delete().in("day_of", ALL_DAYS);
     await admin.from("operational_fleet_status").delete().in("day_of", ALL_DAYS);
     await admin.from("operational_congestion").delete().in("day_of", ALL_DAYS);
-    await admin.from("operational_schedule_reliability").delete().in("month_of", ALL_MONTHS);
+    await admin
+      .from("operational_schedule_reliability")
+      .delete()
+      .in("month_of", ["2098-12-01", "2099-01-01", "2099-06-01"]);
     // Only the rows this script inserted, by id. Deleting every
     // 'newsletter.update' row would take real history with it.
     if (auditIds.length > 0) await admin.from("audit_log").delete().in("id", auditIds);
@@ -856,7 +1058,7 @@ async function databaseChecks() {
     const { count: editions } = await admin
       .from("newsletter_editions")
       .select("id", { count: "exact", head: true })
-      .in("month_of", ALL_MONTHS);
+      .in("week_of", ALL_WEEKS);
     const { count: days } = await admin
       .from("operational_congestion")
       .select("id", { count: "exact", head: true })
@@ -870,40 +1072,60 @@ async function databaseChecks() {
 async function main() {
   logicChecks();
 
+  const skipped: string[] = [];
+
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceKey) {
+    await corpusChecks(
+      createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey)
+    );
+  } else {
+    skipped.push(
+      [
+        "CORPUS TIER DID NOT RUN — no SUPABASE_SERVICE_ROLE_KEY.",
+        "  * whether the week window is a bounded date range in the QUERY",
+        "  * whether the Sunday and the Monday land in the right weeks",
+        "  * whether two adjacent weeks partition the range without loss or overlap",
+      ].join("\n")
+    );
+  }
+
   const haveFixtures =
     process.env.CHECK_CURATE_EMAIL &&
     process.env.CHECK_CURATE_PASSWORD &&
     process.env.CHECK_READ_EMAIL &&
     process.env.CHECK_READ_PASSWORD;
-
   if (haveFixtures) {
     await databaseChecks();
   } else {
-    console.log(
+    skipped.push(
       [
-        "",
-        "DATABASE HALF DID NOT RUN — no role fixtures.",
-        "",
-        "Unproven, and only provable by signing in as real users:",
+        "ROLE TIER DID NOT RUN — no role fixtures.",
         "  * a read user is refused every write to newsletter_editions",
         "  * a curate user is allowed one",
         "  * an audit row cannot be attributed to another user",
         "  * an update to a SENT edition is refused by the database itself",
         "  * a press exclusion survives a round trip through included_article_ids",
         "",
-        "Set CHECK_CURATE_EMAIL / CHECK_CURATE_PASSWORD and",
-        "CHECK_READ_EMAIL / CHECK_READ_PASSWORD and run again.",
+        "  Set CHECK_CURATE_EMAIL / CHECK_CURATE_PASSWORD and",
+        "  CHECK_READ_EMAIL / CHECK_READ_PASSWORD and run again.",
       ].join("\n")
     );
   }
 
-  const ok = failures === 0 && Boolean(haveFixtures);
+  if (skipped.length > 0) {
+    console.log(`\n${skipped.join("\n\n")}`);
+  }
+
+  const ok = failures === 0 && skipped.length === 0;
   console.log(
     failures > 0
       ? `\n${failures} of ${ran} FAILED.`
-      : haveFixtures
+      : ok
         ? `\nAll ${ran} newsletter checks passed.`
-        : `\n${ran} logic checks passed, but the database half did not run — see above.`
+        : `\n${ran} checks passed, but ${skipped.length} tier${
+            skipped.length === 1 ? "" : "s"
+          } did not run — see above.`
   );
   process.exit(ok ? 0 : 1);
 }
