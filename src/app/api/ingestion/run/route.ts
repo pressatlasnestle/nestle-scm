@@ -1,4 +1,4 @@
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -28,8 +28,11 @@ import { runNewsApiAiSweep } from "@/lib/ingestion/newsapi-ai";
  */
 
 export const runtime = "nodejs";
-// Vercel Hobby caps at 60s; raise this if a full backfill needs longer and the
-// plan allows it. Sources are fetched in parallel batches to fit.
+// Vercel Hobby caps at 60s. The run does not rely on fitting: it carries its
+// own DEFAULT_BUDGET_MS (45s), stops between fetch batches when it expires,
+// and closes its ingestion_runs row as 'failed' with what it managed. That is
+// the difference between a run that overruns and a run that vanishes — the
+// two rows stranded at 'running' on 13 and 14 August were the latter.
 export const maxDuration = 60;
 
 const RUN_TYPES: RunType[] = [
@@ -96,25 +99,24 @@ export async function POST(request: Request) {
 
   const client = createAdminClient();
 
-  // Stage 1 sorting is one Gemini call per newly inserted article. after()
-  // hands it to the platform once the response has been sent, so a run that
-  // captures 40 articles still answers in the time the fetch took — which
-  // matters most for the cron caller, sitting under this route's maxDuration.
-  const defer = (task: () => Promise<void>) => after(task);
-
+  // No sorting hook here any more. It used to ride on next/server's after(),
+  // which shares this invocation's maxDuration rather than escaping it, so a
+  // fetch that filled the budget left the sort with nothing and the articles
+  // pending. Sorting is now POST /api/sorting/run on its own schedule; this
+  // route's only job is to capture articles.
   try {
     const summary =
       runType === "backfill"
-        ? await runBackfill(client, null, defer)
+        ? await runBackfill(client)
         : runType === "scheduled"
-          ? await runScheduled(client, defer)
+          ? await runScheduled(client)
           : runType === "manual"
-            ? await runManual(client, null, defer)
+            ? await runManual(client)
             : runType === "google_news_sweep"
               ? await runGoogleNewsSweep(client)
               : runType === "newsapi_ai_sweep"
                 ? await runNewsApiAiSweep(client)
-                : await runForSource(client, body.sourceId as string, null, defer);
+                : await runForSource(client, body.sourceId as string);
 
     return NextResponse.json(summary);
   } catch (err) {

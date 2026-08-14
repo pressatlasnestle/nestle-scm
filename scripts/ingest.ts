@@ -33,6 +33,7 @@ import {
 } from "@/lib/ingestion/run";
 import { runGoogleNewsSweep } from "@/lib/ingestion/google-news";
 import { runNewsApiAiSweep } from "@/lib/ingestion/newsapi-ai";
+import { countPendingArticles } from "@/lib/analysis/sorting";
 
 const USAGE =
   "usage: npm run ingest -- <backfill|scheduled|manual|source <uuid>|google-news|newsapi-ai> [--hours <n>]";
@@ -78,19 +79,23 @@ async function main() {
   let summary: RunSummary;
   const startedAt = Date.now();
 
+  // budgetMs: null everywhere below — the CLI has no serverless ceiling, and a
+  // catch-up run is exactly the case the route's 45s budget would cut short.
+  const cli = { ...windowOverride, budgetMs: null };
+
   switch (command) {
     case "backfill":
-      summary = await runBackfill(client, null, undefined, windowOverride);
+      summary = await runBackfill(client, null, cli);
       break;
     case "scheduled":
-      summary = await runScheduled(client, undefined, windowOverride);
+      summary = await runScheduled(client, cli);
       break;
     case "manual":
-      summary = await runManual(client, null, undefined, windowOverride);
+      summary = await runManual(client, null, cli);
       break;
     case "source":
       if (!argument) throw new Error("source requires a source id.\n" + USAGE);
-      summary = await runForSource(client, argument);
+      summary = await runForSource(client, argument, null, { budgetMs: null });
       break;
     case "google-news":
       summary = await runGoogleNewsSweep(client);
@@ -106,6 +111,10 @@ async function main() {
   console.log(`\n${summary.runType} — ${summary.status} in ${seconds}s`);
   console.log(`  run id                 ${summary.runId ?? "(not logged)"}`);
   console.log(`  sources checked        ${summary.sourcesChecked}`);
+  // Printed next to sources checked, because together they account for the
+  // whole active universe. A source that is deliberately not fetched has to be
+  // visible somewhere or it is just a source that stopped being monitored.
+  console.log(`  sources not fetched    ${summary.sourcesNotFetched}  (no feed by design)`);
   console.log(`  articles found         ${summary.articlesFound}`);
   console.log(`  articles new           ${summary.articlesNew}`);
   console.log(`  articles duplicate     ${summary.articlesDuplicate}`);
@@ -120,6 +129,17 @@ async function main() {
     for (const error of summary.errors) {
       console.log(`    ${error.source} — ${error.error}`);
     }
+  }
+
+  // Ingestion no longer sorts. Said out loud rather than left as an absence,
+  // because "the CLI used to sort what it ingested" is exactly the kind of
+  // behaviour someone will assume is still there and be wrong about.
+  const pending = await countPendingArticles(client);
+  if (pending > 0) {
+    console.log(
+      `\n  ${pending} article(s) awaiting Stage 1 sorting — run 'npm run sort'.` +
+        "\n  (Sorting is a separate stage on its own schedule; it is not part of a run.)"
+    );
   }
 }
 

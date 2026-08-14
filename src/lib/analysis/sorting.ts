@@ -162,40 +162,68 @@ export type SortingBatchSummary = {
   errors: { articleId: string; error: string }[];
 };
 
+/**
+ * How long a sorting pass may run before it stops and leaves the rest pending.
+ *
+ * Sorting is now its own request rather than a passenger on the ingestion
+ * run's remaining seconds, and this is the budget it gets for itself. Stopping
+ * early is cheap here in a way it never was for the fetch: every verdict is
+ * written the moment it is produced, so a pass that stops at article 40 of 120
+ * has banked 40 verdicts and the next pass starts at 41. Nothing is repeated
+ * and nothing is lost.
+ *
+ * 45s against the route's 60s maxDuration, the same margin the ingestion run
+ * uses, covering the in-flight Gemini calls (30s timeout each) that are
+ * allowed to finish.
+ */
+export const SORT_BUDGET_MS = 45_000;
+
 type PendingArticle = { id: string; headline: string; body: string | null };
 
-/**
- * Sorts a specific set of articles by id. Used by the post-ingestion hook,
- * which knows exactly which rows its run inserted.
- *
- * Rows already marked complete are skipped, so calling this twice over the
- * same ids is free — the same idempotency the backfill relies on.
- */
-export async function sortArticles(
-  client: AnalysisClient,
-  articleIds: string[]
-): Promise<SortingBatchSummary> {
-  if (articleIds.length === 0) return emptySummary();
+export type SortPendingOptions = {
+  /** Rows loaded at most. */
+  limit?: number;
+  /** Wall-clock budget in ms; null = unbounded (the CLI). */
+  budgetMs?: number | null;
+};
 
-  const { data, error } = await client
+/** Articles still pending, whether or not this pass intends to reach them. */
+export async function countPendingArticles(
+  client: AnalysisClient
+): Promise<number> {
+  const { count, error } = await client
     .from("articles")
-    .select("id, headline, body")
-    .in("id", articleIds)
+    .select("id", { count: "exact", head: true })
     .eq("ai_sorting_status", "pending");
 
-  if (error) throw new Error(`Could not load articles to sort: ${error.message}`);
-  return sortRows(client, data ?? []);
+  if (error) throw new Error(`Could not count pending articles: ${error.message}`);
+  return count ?? 0;
 }
 
 /**
- * Sorts everything still pending, oldest first. This is the backfill path
- * (`npm run sort`), and it exists because the articles already captured
- * predate the sorting engine.
+ * Sorts everything still pending, oldest first.
+ *
+ * This is now the ONLY way articles get sorted. It used to be the backfill
+ * path alongside a per-run hook that sorted the ids a run had just inserted;
+ * that hook is gone, and selecting by status rather than by id is the whole
+ * improvement. A pass keyed on "what this run inserted" can only ever sort
+ * what that run inserted, so a pass that is skipped, killed or never fired
+ * leaves its articles pending with nothing scheduled to revisit them — which
+ * is precisely how 125 rows accumulated over five days. A pass keyed on
+ * "everything pending" cannot leave a permanent hole, because the next pass
+ * is defined by what is outstanding rather than by what happened earlier.
+ *
+ * Idempotent, so overlapping passes are safe: the status filter means a row
+ * already sorted is never selected, and each verdict is written as it is
+ * produced rather than batched at the end.
  */
 export async function sortPendingArticles(
   client: AnalysisClient,
-  limit = 500
+  options: SortPendingOptions = {}
 ): Promise<SortingBatchSummary> {
+  const limit = options.limit ?? 500;
+  const budgetMs = options.budgetMs === undefined ? null : options.budgetMs;
+
   const { data, error } = await client
     .from("articles")
     .select("id, headline, body")
@@ -204,7 +232,7 @@ export async function sortPendingArticles(
     .limit(limit);
 
   if (error) throw new Error(`Could not load pending articles: ${error.message}`);
-  return sortRows(client, data ?? []);
+  return sortRows(client, data ?? [], budgetMs);
 }
 
 function emptySummary(): SortingBatchSummary {
@@ -213,42 +241,59 @@ function emptySummary(): SortingBatchSummary {
 
 async function sortRows(
   client: AnalysisClient,
-  rows: PendingArticle[]
+  rows: PendingArticle[],
+  budgetMs: number | null
 ): Promise<SortingBatchSummary> {
   const summary = emptySummary();
   if (rows.length === 0) return summary;
 
-  const outcomes = await mapWithConcurrency(rows, SORT_CONCURRENCY, async (row) => {
-    const verdict = await sortArticle(client, row.headline, row.body);
+  const deadline = budgetMs === null ? null : Date.now() + budgetMs;
 
-    // Written per article rather than batched at the end: a run that dies
-    // halfway should keep the judgements it already paid for, and the next
-    // run picks up exactly what is still pending.
-    const { error } = await client
-      .from("articles")
-      .update({
-        ai_sorting_status: "complete",
-        ai_sorting_flagged: verdict.flagged,
-        ai_sorting_reasoning: verdict.reasoning,
-      })
-      .eq("id", row.id);
+  // Walked in groups of SORT_CONCURRENCY rather than handed to
+  // mapWithConcurrency whole, purely so the deadline has somewhere to be
+  // checked. The concurrency and the ordering are unchanged; the only
+  // difference is that a bounded caller can stop between groups instead of
+  // being killed between them.
+  for (let i = 0; i < rows.length; i += SORT_CONCURRENCY) {
+    if (deadline !== null && Date.now() >= deadline) break;
 
-    if (error) throw new Error(`Could not save verdict: ${error.message}`);
-    return verdict;
-  });
+    const group = rows.slice(i, i + SORT_CONCURRENCY);
+    const outcomes = await mapWithConcurrency(
+      group,
+      SORT_CONCURRENCY,
+      async (row) => {
+        const verdict = await sortArticle(client, row.headline, row.body);
 
-  for (const outcome of outcomes) {
-    if (outcome.error !== null || !outcome.result) {
-      summary.failed += 1;
-      summary.errors.push({
-        articleId: outcome.item.id,
-        error: outcome.error ?? "Unknown sorting failure.",
-      });
-      continue;
+        // Written per article rather than batched at the end: a run that dies
+        // halfway should keep the judgements it already paid for, and the next
+        // run picks up exactly what is still pending.
+        const { error } = await client
+          .from("articles")
+          .update({
+            ai_sorting_status: "complete",
+            ai_sorting_flagged: verdict.flagged,
+            ai_sorting_reasoning: verdict.reasoning,
+          })
+          .eq("id", row.id);
+
+        if (error) throw new Error(`Could not save verdict: ${error.message}`);
+        return verdict;
+      }
+    );
+
+    for (const outcome of outcomes) {
+      if (outcome.error !== null || !outcome.result) {
+        summary.failed += 1;
+        summary.errors.push({
+          articleId: outcome.item.id,
+          error: outcome.error ?? "Unknown sorting failure.",
+        });
+        continue;
+      }
+      summary.processed += 1;
+      if (outcome.result.flagged) summary.flagged += 1;
+      else summary.confirmed += 1;
     }
-    summary.processed += 1;
-    if (outcome.result.flagged) summary.flagged += 1;
-    else summary.confirmed += 1;
   }
 
   return summary;

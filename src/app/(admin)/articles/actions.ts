@@ -93,7 +93,13 @@ export async function bulkExcludeArticles(
 export async function countArticlesToCode(
   scope: CodingScope
 ): Promise<
-  | { ok: true; count: number; skippedFlagged: number; cap: number }
+  | {
+      ok: true;
+      count: number;
+      skippedFlagged: number;
+      awaitingSorting: number;
+      cap: number;
+    }
   | { ok: false; error: string }
 > {
   const ctx = await getSessionContext();
@@ -110,6 +116,7 @@ export async function countArticlesToCode(
       ok: true,
       count: counts.codable,
       skippedFlagged: counts.skippedFlagged,
+      awaitingSorting: counts.awaitingSorting,
       cap: MAX_CODING_BATCH,
     };
   } catch (err) {

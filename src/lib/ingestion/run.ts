@@ -1,7 +1,6 @@
 import { fetchSource, type FetchSourceResult } from "./fetch";
 import { upsertArticle, type SourceChannel } from "./dedup";
 import { loadKeywords, matchArticle, type KeywordSet } from "./match";
-import { sortArticles } from "@/lib/analysis/sorting";
 import type {
   FeedItem,
   IngestionClient,
@@ -41,21 +40,46 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * failing, and a failing source burns the full FETCH_TIMEOUT_MS (15s) before
  * it gives up. A batch takes as long as its slowest member, so at concurrency
  * 5 that is ceil(71/5) = 15 batches, most of them containing at least one
- * timeout: comfortably past the route's 60s maxDuration. The first scheduled
- * run after the cron was fixed died exactly that way — it captured 27 articles
- * and was then killed mid-flight, leaving its ingestion_runs row stuck at
- * 'running' because closeRun() never got to execute.
+ * timeout: comfortably past the route's 60s maxDuration.
  *
  * At 24 that is 3 batches, so the timeout-dominated worst case is ~45s rather
- * than ~225s, and a run finishes inside the request that started it.
+ * than ~225s.
  *
- * This is a tuning fix, not a structural one. A universe several times larger,
- * or a slower FETCH_TIMEOUT_MS, would push past 60s again — at which point the
- * answer is to stop doing the whole universe in one request rather than to
- * keep raising this. The CLI (npm run ingest) has no such limit and is the
- * right tool for anything large, which is why the backfill runs there.
+ * This number is no longer load-bearing, and that is the point. It used to be
+ * the ONLY thing standing between a slow fetch and a lost sorting pass, and it
+ * failed at that job twice: raising it bought headroom that the next few
+ * sources spent. What protects the run now is structural — a deadline that
+ * closes the row (see DEFAULT_BUDGET_MS) and a sorting stage that no longer
+ * shares this invocation at all.
  */
 const FETCH_CONCURRENCY = 24;
+
+/**
+ * How long executeRun() may spend fetching before it stops and closes the run.
+ *
+ * Runs used to have no budget at all. They simply ran until the platform
+ * killed them, which produced an ingestion_runs row stuck at 'running' with
+ * every counter null — indistinguishable from a run still in flight, which is
+ * why two of them sat unnoticed for a day. A run that stops itself can write
+ * down what happened; a run that is killed cannot.
+ *
+ * 45s against the route's 60s maxDuration. The margin covers the in-flight
+ * batch (fetches already issued still have up to FETCH_TIMEOUT_MS to drain),
+ * the sequential upserts behind it, and closeRun() itself. Callers with no
+ * ceiling — the CLI — pass null and are not bounded.
+ */
+export const DEFAULT_BUDGET_MS = 45_000;
+
+/**
+ * How long a run may sit at 'running' before a later run declares it dead.
+ *
+ * Generous by design. The point is not to catch a slow run early — it is to
+ * guarantee that a row abandoned by a killed process is eventually closed,
+ * rather than being read forever as "in progress". Nothing legitimate holds a
+ * run open for ten minutes: the route is capped at 60s, and a CLI run long
+ * enough to pass this closes its own row when it finishes regardless.
+ */
+export const STALE_RUN_MS = 10 * 60 * 1000;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -80,12 +104,16 @@ export type RunCounters = {
    */
   articlesSkippedCoded: number;
   /**
-   * Ids of the rows this run inserted. Not a counter, but it rides on the same
-   * accumulator every run type already threads through ingestItems() — which
-   * is what makes the Stage 1 sorting pass fire for the Google News and
-   * newsapi.ai sweeps too, not just the per-source path.
+   * Sources in the universe that were deliberately not fetched, because they
+   * are marked is_fetchable = false.
+   *
+   * A counter rather than silence, and that is the whole design. Not fetching
+   * something is invisible by nature, so the alternative to counting it is a
+   * source that quietly stops being monitored with nothing to show for it.
+   * This number belongs next to sourcesChecked: together they account for the
+   * entire active universe.
    */
-  insertedArticleIds: string[];
+  sourcesNotFetched: number;
 };
 
 export type RunError = { source: string; sourceId: string | null; error: string };
@@ -122,6 +150,20 @@ export async function getUniverseMode(
 export type IngestSource = Pick<SourceRow, "id" | "name" | "rss_url" | "tier">;
 
 /**
+ * What a run's source selection produced: the rows it will fetch, and how many
+ * it deliberately left alone.
+ *
+ * Two numbers rather than one list, because "not fetched" is a fact about the
+ * run that has to survive into ingestion_runs. Returning only the fetchable
+ * rows would make the skipped ones unrepresentable at exactly the moment they
+ * need reporting.
+ */
+export type SourceSelection = {
+  sources: IngestSource[];
+  notFetchable: number;
+};
+
+/**
  * The one tier value the pipeline reads rather than just displays. Google
  * Alerts feeds are structurally ordinary Atom and fetch identically, so the
  * tier is the only thing that distinguishes an alert entry from a publisher's
@@ -139,13 +181,36 @@ export function channelForSource(source: IngestSource): SourceChannel {
   return source.tier === GOOGLE_ALERTS_TIER ? "google_alerts" : "media_rss";
 }
 
+/**
+ * The active universe for a mode, split into what will be fetched and what
+ * will not.
+ *
+ * The is_fetchable split is the reason `partial_failure` means anything again.
+ * Before it, every source in the universe was fetched whether or not it could
+ * be: 21 active rows had no feed URL — Lloyd's List, TradeWinds, Drewry and
+ * Xeneta are paywalled with no public feed at all; "Evergreen / HMM / Yang
+ * Ming / ZIM" and "Port of Rotterdam / Antwerp-Bruges / Hamburg" are grouping
+ * rows naming several publishers, which no single URL can represent. Each one
+ * logged "No RSS URL configured." on every run, forever, so every scheduled
+ * run reported partial_failure and the status stopped carrying information.
+ *
+ * Marking them not-fetchable is not the same as deactivating them: they stay
+ * in the universe, visible in the Media Universe panel, still eligible for
+ * whatever coverage the Google News and newsapi.ai sweeps give them. They are
+ * simply no longer asked for a feed they do not have.
+ *
+ * Note what is NOT filtered here. A source marked fetchable that has no URL
+ * still goes to fetchSource() and still errors — that combination is a genuine
+ * misconfiguration (someone added a source and forgot the URL) and must stay
+ * loud. The filter suppresses the declared case, not the accidental one.
+ */
 export async function selectSources(
   client: IngestionClient,
   mode: UniverseMode
-): Promise<IngestSource[]> {
+): Promise<SourceSelection> {
   let query = client
     .from("sources")
-    .select("id, name, rss_url, tier")
+    .select("id, name, rss_url, tier, is_fetchable")
     .eq("is_active", true);
 
   query =
@@ -155,7 +220,10 @@ export async function selectSources(
 
   const { data, error } = await query.order("name");
   if (error) throw new Error(`Failed to load sources: ${error.message}`);
-  return data ?? [];
+
+  const rows = data ?? [];
+  const sources = rows.filter((s) => s.is_fetchable !== false);
+  return { sources, notFetchable: rows.length - sources.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,8 +245,68 @@ export function emptyCounters(): RunCounters {
     articlesSkippedPaywall: 0,
     articlesSuppressedExclusion: 0,
     articlesSkippedCoded: 0,
-    insertedArticleIds: [],
+    sourcesNotFetched: 0,
   };
+}
+
+/**
+ * Closes ingestion_runs rows abandoned by a process that never came back.
+ *
+ * The deadline in executeRun() handles the expected case — a run that is
+ * merely slow stops itself and writes down why. This handles the case a
+ * running process cannot handle at all: an OOM, a deploy mid-run, a platform
+ * kill that does not unwind the stack. No in-process mechanism can close a row
+ * after the process is gone, so something outside it has to.
+ *
+ * Called at the start of every run, which makes the pipeline self-healing
+ * without a separate janitor to schedule and forget about: the next run
+ * cleans up after the last one. The two rows stranded on 13 and 14 August are
+ * exactly what this exists to prevent, and it closes them on its first pass.
+ *
+ * Never allowed to fail a run — a reaper that stops an ingest is worse than
+ * the stale rows it was cleaning up.
+ */
+export async function reapStaleRuns(
+  client: IngestionClient,
+  staleMs: number = STALE_RUN_MS
+): Promise<number> {
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+
+  try {
+    const { data, error } = await client
+      .from("ingestion_runs")
+      .update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        errors: [
+          {
+            source: "(runtime)",
+            sourceId: null,
+            error: `Run left open for more than ${Math.round(staleMs / 60_000)} minutes with no completion; the process did not survive to close it. Marked failed by the next run.`,
+          },
+        ],
+      })
+      .eq("status", "running")
+      .lt("started_at", cutoff)
+      .select("id");
+
+    if (error) {
+      console.error("[ingestion] could not reap stale runs:", error.message);
+      return 0;
+    }
+
+    const reaped = data ?? [];
+    for (const row of reaped) {
+      console.warn(`[ingestion] reaped stale run ${row.id} → failed`);
+    }
+    return reaped.length;
+  } catch (err) {
+    console.error(
+      "[ingestion] could not reap stale runs:",
+      err instanceof Error ? err.message : err
+    );
+    return 0;
+  }
 }
 
 async function openRun(
@@ -226,6 +354,7 @@ async function closeRun(
       articles_skipped_paywall: summary.articlesSkippedPaywall,
       articles_suppressed_exclusion: summary.articlesSuppressedExclusion,
       articles_skipped_coded: summary.articlesSkippedCoded,
+      sources_not_fetched: summary.sourcesNotFetched,
       errors: summary.errors.length > 0 ? summary.errors : null,
     })
     .eq("id", runId);
@@ -281,7 +410,6 @@ export async function ingestItems(
 
     if (result.outcome === "inserted") {
       counters.articlesNew += 1;
-      if (result.articleId) counters.insertedArticleIds.push(result.articleId);
     } else {
       // 'updated', 'skipped_tombstoned' and 'skipped_coded' are all "we
       // already knew this story": one enriched an existing row, one hit a
@@ -303,6 +431,32 @@ export async function ingestItems(
   }
 }
 
+/**
+ * WHERE SORTING WENT.
+ *
+ * Stage 1 sorting used to run at the end of this file, handed to next/server's
+ * after() so the HTTP response was not held open for one Gemini call per new
+ * article. That worked as described and still lost the sorting, because
+ * after() defers past the RESPONSE, not past maxDuration: the deferred task
+ * runs inside the same invocation and inherits whatever is left of its 60
+ * seconds. As the fetch grew to fill the budget, sorting was left with the
+ * remainder and then killed mid-pass.
+ *
+ * The failure is worth naming precisely, because it did not look like a
+ * failure. The scheduled run of 14 August 12:00 captured 31 articles, closed
+ * cleanly, and sorted none of them — 57 seconds of fetch left nothing for the
+ * sort. Two runs either side of it were killed outright. The visible symptom
+ * in every case was the same: articles present, sorting pending, days later.
+ *
+ * So sorting no longer shares this invocation with anything. It has its own
+ * route and its own schedule, and it selects by ai_sorting_status = 'pending'
+ * rather than by the ids a particular run inserted — which means it recovers
+ * from a missed pass on its own, whatever caused the miss. See
+ * src/app/api/sorting/run/route.ts and sortPendingArticles().
+ *
+ * The concrete gain is that a slow fetch now costs exactly a slow fetch. It
+ * cannot cost the sort, because the sort is not in the same budget.
+ */
 export type ExecuteRunOptions = {
   runType: RunType;
   window: IngestionWindow;
@@ -310,60 +464,28 @@ export type ExecuteRunOptions = {
   triggeredBy?: string | null;
   /** Pre-loaded to avoid re-reading the keyword table per source. */
   keywords?: KeywordSet;
+  /** Reported on the run row; see RunCounters.sourcesNotFetched. */
+  notFetchable?: number;
   /**
-   * How to run the post-run Stage 1 sorting pass.
+   * Wall-clock budget for fetching, in ms. null = unbounded (the CLI).
    *
-   * Request-scoped callers pass next/server's after(), so the HTTP response is
-   * not held open for one Gemini call per new article. The CLI passes nothing
-   * and the pass runs inline before the process exits — a script that returned
-   * before its work finished would simply lose it, there being no server
-   * lifetime to hand the task to.
+   * Enforced between batches rather than mid-batch: fetches already in flight
+   * are allowed to drain, so the real ceiling is this plus one FETCH_TIMEOUT_MS
+   * — which is what the margin against maxDuration is for.
    */
-  defer?: (task: () => Promise<void>) => void;
+  budgetMs?: number | null;
 };
-
-/**
- * Fires Stage 1 sorting over the rows a run just inserted.
- *
- * Never allowed to affect the run: sorting is annotation, and an unset Gemini
- * key or a bad model id must not turn a successful ingest into a failed one.
- * Failures land in the log and the rows stay 'pending', so `npm run sort`
- * picks them up later.
- */
-export async function scheduleSorting(
-  client: IngestionClient,
-  counters: RunCounters,
-  defer?: ExecuteRunOptions["defer"]
-): Promise<void> {
-  const articleIds = [...counters.insertedArticleIds];
-  if (articleIds.length === 0) return;
-
-  const task = async () => {
-    try {
-      const result = await sortArticles(client, articleIds);
-      console.log(
-        `[sorting] ${result.processed} sorted (${result.flagged} flagged, ${result.confirmed} confirmed), ${result.failed} failed`
-      );
-      for (const e of result.errors) {
-        console.error(`[sorting] ${e.articleId}: ${e.error}`);
-      }
-    } catch (err) {
-      console.error(
-        "[sorting] post-ingestion pass failed:",
-        err instanceof Error ? err.message : err
-      );
-    }
-  };
-
-  if (defer) defer(task);
-  else await task();
-}
 
 export async function executeRun(
   client: IngestionClient,
   options: ExecuteRunOptions
 ): Promise<RunSummary> {
   const { runType, window, sources } = options;
+
+  // Before opening a row, not after: a run that is about to add a row to this
+  // table is the natural moment to notice the last one never closed.
+  await reapStaleRuns(client);
+
   const runId = await openRun(
     client,
     runType,
@@ -372,7 +494,12 @@ export async function executeRun(
   );
 
   const counters = emptyCounters();
+  counters.sourcesNotFetched = options.notFetchable ?? 0;
   const errors: RunError[] = [];
+
+  const budgetMs = options.budgetMs === undefined ? null : options.budgetMs;
+  const deadline = budgetMs === null ? null : Date.now() + budgetMs;
+  let truncated = false;
 
   let keywords: KeywordSet;
   try {
@@ -401,6 +528,21 @@ export async function executeRun(
   // not the database, and serial upserts keep the dedup read-then-write pair
   // from racing itself within a single run.
   for (const batch of chunk(sources, FETCH_CONCURRENCY)) {
+    // Checked before starting a batch, never in the middle of one. Abandoning
+    // fetches already issued would lose their articles for nothing; the whole
+    // value of stopping here is that the run gets to write down where it got
+    // to, and that requires reaching closeRun() under its own power.
+    if (deadline !== null && Date.now() >= deadline) {
+      truncated = true;
+      const unchecked = sources.length - counters.sourcesChecked;
+      errors.push({
+        source: "(runtime)",
+        sourceId: null,
+        error: `Run stopped at its ${Math.round(budgetMs! / 1000)}s budget with ${unchecked} of ${sources.length} source(s) unchecked. Articles captured before the stop are kept. Re-run, or use the CLI (npm run ingest), which has no budget.`,
+      });
+      break;
+    }
+
     const settled = await Promise.all(
       batch.map(async (source) => {
         try {
@@ -458,8 +600,14 @@ export async function executeRun(
     }
   }
 
-  const status: RunSummary["status"] =
-    errors.length === 0
+  // A truncated run is 'failed' outright, not 'partial_failure'. The two mean
+  // different things and conflating them would undo the point of this change:
+  // partial_failure says "the universe was covered, some sources are broken",
+  // which is a source-health signal. A run that stopped early did not cover
+  // the universe at all, and nothing it reports about coverage can be trusted.
+  const status: RunSummary["status"] = truncated
+    ? "failed"
+    : errors.length === 0
       ? "ok"
       : errors.length >= sources.length && sources.length > 0
         ? "failed"
@@ -467,11 +615,6 @@ export async function executeRun(
 
   const summary: RunSummary = { ...counters, runId, runType, status, errors };
   await closeRun(client, runId, summary);
-
-  // After closeRun, so the run is already logged as finished before any Gemini
-  // call is made — sorting is a separate concern and must not widen the run's
-  // recorded duration or its status.
-  await scheduleSorting(client, counters, options.defer);
 
   return summary;
 }
@@ -520,21 +663,32 @@ export function resolveWindowMs(
   return hours * HOUR_MS;
 }
 
+/**
+ * The wall-clock budget a run type gets.
+ *
+ * Every entry point takes it as a parameter rather than reading a constant,
+ * because the ceiling is a property of the CALLER, not of the run type: the
+ * same runScheduled() is bounded at 45s under the route and unbounded under
+ * the CLI. Defaulting to DEFAULT_BUDGET_MS makes the safe case the one you get
+ * by not thinking about it, and null is how the CLI opts out explicitly.
+ */
+export type RunOptions = WindowOverride & { budgetMs?: number | null };
+
 /** One-time seed: all active sources for the current universe mode, 7 days. */
 export async function runBackfill(
   client: IngestionClient,
   triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"],
-  window?: WindowOverride
+  options?: RunOptions
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
-  const sources = await selectSources(client, mode);
+  const { sources, notFetchable } = await selectSources(client, mode);
   return executeRun(client, {
     runType: "backfill",
-    window: windowEndingNow(resolveWindowMs(WINDOW_BACKFILL_MS, window)),
+    window: windowEndingNow(resolveWindowMs(WINDOW_BACKFILL_MS, options)),
     sources,
+    notFetchable,
     triggeredBy,
-    defer,
+    budgetMs: options?.budgetMs ?? DEFAULT_BUDGET_MS,
   });
 }
 
@@ -544,16 +698,16 @@ export async function runBackfill(
  */
 export async function runScheduled(
   client: IngestionClient,
-  defer?: ExecuteRunOptions["defer"],
-  window?: WindowOverride
+  options?: RunOptions
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
-  const sources = await selectSources(client, mode);
+  const { sources, notFetchable } = await selectSources(client, mode);
   return executeRun(client, {
     runType: "scheduled",
-    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, window)),
+    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, options)),
     sources,
-    defer,
+    notFetchable,
+    budgetMs: options?.budgetMs ?? DEFAULT_BUDGET_MS,
   });
 }
 
@@ -567,17 +721,17 @@ export async function runScheduled(
 export async function runManual(
   client: IngestionClient,
   triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"],
-  window?: WindowOverride
+  options?: RunOptions
 ): Promise<RunSummary> {
   const mode = await getUniverseMode(client);
-  const sources = await selectSources(client, mode);
+  const { sources, notFetchable } = await selectSources(client, mode);
   return executeRun(client, {
     runType: "manual",
-    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, window)),
+    window: windowEndingNow(resolveWindowMs(WINDOW_SCHEDULED_MS, options)),
     sources,
+    notFetchable,
     triggeredBy,
-    defer,
+    budgetMs: options?.budgetMs ?? DEFAULT_BUDGET_MS,
   });
 }
 
@@ -590,7 +744,7 @@ export async function runForSource(
   client: IngestionClient,
   sourceId: string,
   triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"]
+  options?: { budgetMs?: number | null }
 ): Promise<RunSummary> {
   const { data, error } = await client
     .from("sources")
@@ -619,6 +773,6 @@ export async function runForSource(
     window: windowEndingNow(WINDOW_BACKFILL_MS),
     sources: [data],
     triggeredBy,
-    defer,
+    budgetMs: options?.budgetMs ?? DEFAULT_BUDGET_MS,
   });
 }

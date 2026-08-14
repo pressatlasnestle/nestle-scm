@@ -10,12 +10,26 @@ import {
   addSource,
   deleteSource,
   setSourceActive,
+  setSourceFetchable,
   type ListTypeInput,
 } from "./actions";
 
 type Source = Tables<"sources">;
 
 function health(s: Source): { dot: string; text: string; cls: string } {
+  // Before last_fetch_status, and not derived from it. A not-fetchable source
+  // keeps whatever status its last attempt left behind — often 'error', from
+  // back when it was being asked for a feed it does not have. Reading that as
+  // ill health would be reporting a problem that has been resolved by deciding
+  // not to have it.
+  if (s.is_fetchable === false) {
+    return {
+      dot: "idle",
+      text: "Not fetched · no feed",
+      cls: "mono-dim",
+    };
+  }
+
   switch (s.last_fetch_status) {
     case "ok":
       return { dot: "ok", text: `OK · ${relativeTime(s.last_fetched_at)}`, cls: "mono-dim" };
@@ -128,6 +142,18 @@ export function SourcesTable({
     });
   }
 
+  function toggleFetchable(s: Source) {
+    setBusyId(s.id);
+    startTransition(async () => {
+      const res = await setSourceFetchable(s.id, !s.is_fetchable);
+      setBusyId(null);
+      // Turning fetching on for a source with no URL is refused server-side.
+      // Surfaced as a message rather than a disabled control, because the
+      // reason ("add a feed URL first") is the useful part.
+      if (!res.ok) toast.error(res.error);
+    });
+  }
+
   return (
     <>
       <div className="table-card">
@@ -212,6 +238,12 @@ export function SourcesTable({
                   <th>List</th>
                   <th>Category</th>
                   <th>Health</th>
+                  {/* Two switches, because they answer different questions:
+                      Active is "do we monitor this at all", Fetch is "does it
+                      have a feed to read". A paywalled publisher is monitored
+                      via the aggregator sweeps and has no feed — one switch
+                      could not say that. */}
+                  <th>Fetch</th>
                   <th>Active</th>
                   {canEdit && <th />}
                 </tr>
@@ -243,6 +275,24 @@ export function SourcesTable({
                       <td>
                         <button
                           type="button"
+                          className={`switch${s.is_fetchable ? " on" : ""}`}
+                          aria-label={
+                            s.is_fetchable
+                              ? "Stop fetching this feed"
+                              : "Fetch this feed"
+                          }
+                          title={
+                            s.is_fetchable
+                              ? "Fetched for RSS on every run."
+                              : "Not fetched — no feed. Still in the universe and still covered by the aggregator sweeps."
+                          }
+                          disabled={!canEdit || busy}
+                          onClick={() => toggleFetchable(s)}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
                           className={`switch${s.is_active ? " on" : ""}`}
                           aria-label={s.is_active ? "Deactivate" : "Activate"}
                           disabled={!canEdit || busy}
@@ -267,7 +317,7 @@ export function SourcesTable({
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={canEdit ? 6 : 5} className="mono-dim">
+                    <td colSpan={canEdit ? 7 : 6} className="mono-dim">
                       No sources match the current filter.
                     </td>
                   </tr>

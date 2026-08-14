@@ -1,8 +1,6 @@
 import { loadKeywords } from "./match";
 import {
   ingestItems,
-  scheduleSorting,
-  type ExecuteRunOptions,
   emptyCounters,
   type RunCounters,
   type RunError,
@@ -302,8 +300,7 @@ export async function selectDomainTargets(
 
 export async function runNewsApiAiSweep(
   client: IngestionClient,
-  triggeredBy: string | null = null,
-  defer?: ExecuteRunOptions["defer"]
+  triggeredBy: string | null = null
 ): Promise<RunSummary> {
   const end = new Date();
   const start = new Date(end.getTime() - WINDOW_DAYS * 24 * 3600 * 1000);
@@ -332,7 +329,7 @@ export async function runNewsApiAiSweep(
       selectDomainTargets(client),
     ]);
   } catch (err) {
-    return finish(client, runId, counters, defer, [
+    return finish(client, runId, counters, [
       {
         source: "(newsapi.ai setup)",
         sourceId: null,
@@ -350,7 +347,7 @@ export async function runNewsApiAiSweep(
     console.warn(
       "[newsapi.ai] no gap sources have a website_domain set — nothing to sweep."
     );
-    return finish(client, runId, counters, defer, errors);
+    return finish(client, runId, counters, errors);
   }
 
   const keywords = await loadKeywords(client);
@@ -413,14 +410,13 @@ export async function runNewsApiAiSweep(
       (truncated ? " Page cap reached." : "")
   );
 
-  return finish(client, runId, counters, defer, errors);
+  return finish(client, runId, counters, errors);
 }
 
 async function finish(
   client: IngestionClient,
   runId: string | null,
   counters: RunCounters,
-  defer: ExecuteRunOptions["defer"] | undefined,
   errors: RunError[]
 ): Promise<RunSummary> {
   // One request covers every domain, so there is no per-domain outcome to be
@@ -449,14 +445,13 @@ async function finish(
         articles_skipped_paywall: counters.articlesSkippedPaywall,
         articles_suppressed_exclusion: counters.articlesSuppressedExclusion,
         articles_skipped_coded: counters.articlesSkippedCoded,
+        sources_not_fetched: counters.sourcesNotFetched,
         errors: errors.length > 0 ? errors : null,
       })
       .eq("id", runId);
   }
 
-  // Stage 1 sorting, same as the per-source path in executeRun(). No defer:
-  // this sweep is CLI-triggered, so the pass runs inline before it returns.
-  await scheduleSorting(client, counters, defer);
-
+  // No sorting pass here any more — see the note in google-news.ts's finish()
+  // and, for the reasoning, the one in run.ts above ExecuteRunOptions.
   return summary;
 }

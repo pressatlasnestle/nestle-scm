@@ -348,6 +348,11 @@ export function ArticlesView({
   const [codingBusy, setCodingBusy] = useState(false);
   const [codingCount, setCodingCount] = useState<number | null>(null);
   const [codingSkipped, setCodingSkipped] = useState(0);
+  // Articles the sorting pass has not reached yet. Distinct from codingSkipped:
+  // those were judged and set aside, these have not been judged. Coding is
+  // gated on sorting, so they are not eligible — and an analyst who asked to
+  // code a period has to be told that rather than left to notice the shortfall.
+  const [codingUnsorted, setCodingUnsorted] = useState(0);
   const [codingCap, setCodingCap] = useState<number | null>(null);
   const [codingError, setCodingError] = useState<string | null>(null);
 
@@ -370,6 +375,7 @@ export function ArticlesView({
     setCodingOpen(true);
     setCodingCount(null);
     setCodingSkipped(0);
+    setCodingUnsorted(0);
     setCodingCap(null);
     setCodingError(null);
     startTransition(async () => {
@@ -377,6 +383,7 @@ export function ArticlesView({
       if (res.ok) {
         setCodingCount(res.count);
         setCodingSkipped(res.skippedFlagged);
+        setCodingUnsorted(res.awaitingSorting);
         setCodingCap(res.cap);
       } else {
         setCodingError(res.error);
@@ -873,7 +880,15 @@ export function ArticlesView({
           ) : codingCount === 0 ? (
             <>
               Nothing to code in this view.{" "}
-              {codingSkipped > 0 ? (
+              {codingUnsorted > 0 ? (
+                <>
+                  {codingUnsorted} uncoded article
+                  {codingUnsorted === 1 ? " is" : "s are"} still waiting for the
+                  sorting pass, which decides whether an article belongs in the
+                  corpus at all. Coding is gated on it, so they are not
+                  available yet — the pass runs hourly.
+                </>
+              ) : codingSkipped > 0 ? (
                 <>
                   All {codingSkipped} uncoded article
                   {codingSkipped === 1 ? " is" : "s are"} flagged{" "}
@@ -912,6 +927,19 @@ export function ArticlesView({
                   and will <strong>not</strong> be coded — a fixed theme list
                   has no bucket for an off-topic story, so it would land in
                   whichever one is least wrong.
+                </>
+              )}
+              {codingUnsorted > 0 && (
+                <>
+                  <br />
+                  <br />
+                  {codingUnsorted} further article
+                  {codingUnsorted === 1 ? " is" : "s are"} waiting for the
+                  sorting pass and will <strong>not</strong> be coded in this
+                  run. Sorting decides whether an article belongs in the corpus,
+                  and coding is gated on it — grading the impact of a story
+                  nothing has judged relevant is how off-topic articles end up
+                  with themes. The pass runs hourly; re-run this afterwards.
                 </>
               )}
               {codingCap !== null && codingCount > codingCap && (

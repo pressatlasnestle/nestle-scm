@@ -89,13 +89,22 @@ async function runCoding(args: string[]) {
   const range = resolvePeriod(scope.period, { from: scope.from, to: scope.to });
   const label = describeRange(scope.period, range);
 
-  const { codable, skippedFlagged } = await countCodingCandidates(client, scope);
+  const { codable, skippedFlagged, awaitingSorting } =
+    await countCodingCandidates(client, scope);
   console.log(
-    `${codable} active, uncoded article(s) in ${label}; coding up to ${MAX_CODING_BATCH}.`
+    `${codable} active, uncoded, SORTED article(s) in ${label}; coding up to ${MAX_CODING_BATCH}.`
   );
   if (skippedFlagged > 0) {
     console.log(
       `  (${skippedFlagged} further uncoded article(s) skipped: flagged off-topic by sorting)`
+    );
+  }
+  // Not the same skip. These have not been judged at all, and coding is gated
+  // on sorting — so "0 to code" can mean "sorting has not caught up", which
+  // reads as "nothing to do" unless it is said.
+  if (awaitingSorting > 0) {
+    console.log(
+      `  (${awaitingSorting} further uncoded article(s) not eligible: awaiting Stage 1 sorting — run 'npm run sort')`
     );
   }
   if (codable === 0) return;

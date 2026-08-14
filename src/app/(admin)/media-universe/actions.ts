@@ -36,6 +36,11 @@ export async function addSource(input: {
       list_type: input.listType === "neutral" ? null : input.listType,
       category: category || null,
       added_by: userId,
+      // Derived from whether a feed was actually supplied. A source added
+      // without a URL is not fetchable by definition, and marking it so here
+      // is what keeps the fetcher from logging a failure for it on every run
+      // forever — the state 21 existing sources were in.
+      is_fetchable: Boolean(rssUrl),
     })
     .select("id")
     .single();
@@ -46,12 +51,14 @@ export async function addSource(input: {
   // scheduled run. after() defers it past the response so the admin isn't kept
   // waiting on a network fetch, and a failed ingest never fails the add — the
   // run is logged to ingestion_runs either way.
-  if (data?.id) {
+  //
+  // Only when there is something to fetch. Firing a run for a source with no
+  // feed would produce an ingestion_runs row whose only content is the error
+  // that the source has no feed, which is not news to anyone.
+  if (data?.id && rssUrl) {
     const sourceId = data.id;
     after(async () => {
       try {
-        // Already inside after(), so the Stage 1 sorting pass can just run
-        // inline at the end of the run rather than being deferred again.
         await runForSource(createAdminClient(), sourceId, userId);
       } catch (err) {
         console.error("[ingestion] source_added run failed:", err);
@@ -79,6 +86,49 @@ export async function setSourceActive(
   const { error } = await supabase
     .from("sources")
     .update({ is_active: active })
+    .eq("id", id);
+  if (error) return { ok: false, error: toActionError(error) };
+  revalidatePath(PATH);
+  return { ok: true };
+}
+
+/**
+ * Toggles whether a source is fetched for RSS.
+ *
+ * Separate from setSourceActive() because they answer different questions.
+ * is_active is "do we monitor this at all"; is_fetchable is "does this have a
+ * feed to read". A paywalled publisher with no feed is very much still
+ * monitored — the aggregator sweeps cover it — it just cannot be asked for RSS.
+ * Collapsing the two would have meant deactivating Lloyd's List to stop it
+ * failing, which would also have removed it from the universe.
+ */
+export async function setSourceFetchable(
+  id: string,
+  fetchable: boolean
+): Promise<ActionResult> {
+  const supabase = await createClient();
+
+  if (fetchable) {
+    // Turning it back on without a feed would restore exactly the behaviour
+    // this flag exists to stop: one logged failure per run, forever.
+    const { data } = await supabase
+      .from("sources")
+      .select("rss_url")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (!data?.rss_url?.trim()) {
+      return {
+        ok: false,
+        error:
+          "This source has no RSS URL, so there is nothing to fetch. Add a feed URL first.",
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("sources")
+    .update({ is_fetchable: fetchable })
     .eq("id", id);
   if (error) return { ok: false, error: toActionError(error) };
   revalidatePath(PATH);

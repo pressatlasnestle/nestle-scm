@@ -59,6 +59,7 @@ export type Database = {
           body_purged_at: string | null
           byline: string | null
           coded_status: string | null
+          coding_version: number | null
           dedup_key: string
           headline: string
           id: string
@@ -92,6 +93,7 @@ export type Database = {
           body_purged_at?: string | null
           byline?: string | null
           coded_status?: string | null
+          coding_version?: number | null
           dedup_key: string
           headline: string
           id?: string
@@ -125,6 +127,7 @@ export type Database = {
           body_purged_at?: string | null
           byline?: string | null
           coded_status?: string | null
+          coding_version?: number | null
           dedup_key?: string
           headline?: string
           id?: string
@@ -211,6 +214,7 @@ export type Database = {
           id: string
           run_type: string
           sources_checked: number | null
+          sources_not_fetched: number | null
           started_at: string
           status: string
           triggered_by: string | null
@@ -229,6 +233,7 @@ export type Database = {
           id?: string
           run_type: string
           sources_checked?: number | null
+          sources_not_fetched?: number | null
           started_at?: string
           status?: string
           triggered_by?: string | null
@@ -247,6 +252,7 @@ export type Database = {
           id?: string
           run_type?: string
           sources_checked?: number | null
+          sources_not_fetched?: number | null
           started_at?: string
           status?: string
           triggered_by?: string | null
@@ -785,6 +791,7 @@ export type Database = {
           handling_notes: string | null
           id: string
           is_active: boolean
+          is_fetchable: boolean
           last_fetch_error: string | null
           last_fetch_status: string | null
           last_fetched_at: string | null
@@ -804,6 +811,7 @@ export type Database = {
           handling_notes?: string | null
           id?: string
           is_active?: boolean
+          is_fetchable?: boolean
           last_fetch_error?: string | null
           last_fetch_status?: string | null
           last_fetched_at?: string | null
@@ -823,6 +831,7 @@ export type Database = {
           handling_notes?: string | null
           id?: string
           is_active?: boolean
+          is_fetchable?: boolean
           last_fetch_error?: string | null
           last_fetch_status?: string | null
           last_fetched_at?: string | null
@@ -899,6 +908,8 @@ export type Database = {
         Args: { p_provider: string; p_secret_value: string }
         Returns: undefined
       }
+      trigger_ingestion: { Args: { p_run_type: string }; Returns: undefined }
+      trigger_sorting: { Args: never; Returns: undefined }
     }
     Enums: {
       [_ in never]: never

@@ -2,8 +2,6 @@ import { fetchFeedXml, parseFeed } from "./fetch";
 import { loadKeywords, GATE_2 } from "./match";
 import {
   ingestItems,
-  scheduleSorting,
-  type ExecuteRunOptions,
   emptyCounters,
   type RunCounters,
   type RunError,
@@ -108,8 +106,7 @@ export function stripPublisherSuffix(item: FeedItem): FeedItem {
 }
 
 export async function runGoogleNewsSweep(
-  client: IngestionClient,
-  defer?: ExecuteRunOptions["defer"]
+  client: IngestionClient
 ): Promise<RunSummary> {
   const end = new Date();
   const start = new Date(end.getTime() - SWEEP_WINDOW_DAYS * 24 * 3600 * 1000);
@@ -135,7 +132,7 @@ export async function runGoogleNewsSweep(
   const runId = runRow?.id ?? null;
 
   if (keywordError) {
-    return finish(client, runId, counters, defer, [
+    return finish(client, runId, counters, [
       { source: "(keywords)", sourceId: null, error: keywordError.message },
     ]);
   }
@@ -180,14 +177,13 @@ export async function runGoogleNewsSweep(
     }
   }
 
-  return finish(client, runId, counters, defer, errors, queries.length);
+  return finish(client, runId, counters, errors, queries.length);
 }
 
 async function finish(
   client: IngestionClient,
   runId: string | null,
   counters: RunCounters,
-  defer: ExecuteRunOptions["defer"] | undefined,
   errors: RunError[],
   queryCount = 0
 ): Promise<RunSummary> {
@@ -222,15 +218,15 @@ async function finish(
         articles_skipped_paywall: counters.articlesSkippedPaywall,
         articles_suppressed_exclusion: counters.articlesSuppressedExclusion,
         articles_skipped_coded: counters.articlesSkippedCoded,
+        sources_not_fetched: counters.sourcesNotFetched,
         errors: errors.length > 0 ? errors : null,
       })
       .eq("id", runId);
   }
 
-  // Stage 1 sorting, same as the per-source path in executeRun(). This sweep is
-  // manual-only and CLI-triggered, so there is no defer: it runs inline before
-  // the command returns.
-  await scheduleSorting(client, counters, defer);
-
+  // No sorting pass here any more. Every ingestion path now leaves its rows at
+  // ai_sorting_status = 'pending' and the sorting stage collects them on its
+  // own schedule — see the note in run.ts on why sharing an invocation with
+  // the fetch cost this sweep its sort as surely as it cost the scheduled run.
   return summary;
 }

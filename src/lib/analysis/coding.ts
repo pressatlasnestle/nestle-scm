@@ -22,6 +22,27 @@ import type { AnalysisClient } from "./models";
 /** Articles coded at once. Same bound as sorting, for the same reason. */
 const CODE_CONCURRENCY = 4;
 
+/**
+ * Which favourability methodology this file implements.
+ *
+ * Bumped whenever a change to SUBJECT, GRADE_ANCHORS, RELEVANCE_ANCHORS or the
+ * no-impact rule would make a stored grade incomparable with a new one — which
+ * is the only kind of change that justifies re-spending on a coded article.
+ *
+ *   1  the pre-628c50a arithmetic scale, and the 628c50a recode that replaced
+ *      it: impact on Nestlé AOA, anchored five-point grade, separate 0-100
+ *      relevance, impact_rationale as the forcing function.
+ *   2  no methodology change of its own. The bump exists to force one full
+ *      pass over a corpus that was never fully on version 1: 161 rows were
+ *      recoded then, 114 arrived afterwards under the same prompt but were
+ *      never checked against it, and the sorting stall meant a further cohort
+ *      had never been coded at all. Same scale, applied to everything, once.
+ *
+ * Stored per article, which is what makes a recode resumable — see
+ * migration 20260814000033 and scripts/recode.ts.
+ */
+export const CODING_VERSION = 2;
+
 /** Body characters sent per article. */
 const MAX_BODY_CHARS = 8_000;
 
@@ -472,7 +493,52 @@ export type CodableArticle = {
   headline: string;
   body: string | null;
   matched_keywords: string[];
+  /**
+   * Carried purely so assertSorted() can check it. Not used to code anything.
+   *
+   * On the type rather than looked up inside codeArticles() on purpose: a
+   * caller must SELECT it, which means a new caller cannot accidentally
+   * assemble a row that skips the check — the compiler asks for the column
+   * before the assertion ever runs.
+   */
+  ai_sorting_status: string | null;
 };
+
+/** Columns every coding caller must select. One list, so they cannot drift. */
+export const CODABLE_COLUMNS =
+  "id, headline, body, matched_keywords, ai_sorting_status";
+
+/**
+ * The relevance gate, enforced at the point of spending money.
+ *
+ * coding-batch.ts already filters on ai_sorting_status = 'complete', and that
+ * filter is the mechanism; this is the assertion that the mechanism is
+ * present. The distinction matters because the previous version of that filter
+ * looked correct and was not — `not(ai_sorting_flagged is true)` reads like a
+ * gate and lets every unsorted row through, which is how 28 articles were
+ * coded without ever being screened. A query condition can be quietly wrong.
+ * A thrown error cannot be quietly wrong.
+ *
+ * It throws rather than filtering. Silently dropping the offending rows would
+ * make a caller with a broken selection look like a caller with less work to
+ * do, which is the exact failure being guarded against: the bug was invisible
+ * for days because nothing complained. This complains.
+ *
+ * Applies to every path — the panel, the CLI, the recode — because it lives
+ * here rather than in any one of their selections.
+ */
+export function assertSorted(rows: CodableArticle[]): void {
+  const unsorted = rows.filter((r) => r.ai_sorting_status !== "complete");
+  if (unsorted.length === 0) return;
+
+  throw new Error(
+    `Coding was handed ${unsorted.length} article(s) that have not been through Stage 1 sorting ` +
+      `(ai_sorting_status: ${[...new Set(unsorted.map((r) => r.ai_sorting_status ?? "null"))].join(", ")}). ` +
+      `Coding is gated on sorting: an article of unjudged relevance must not be graded for its impact. ` +
+      `Run 'npm run sort' first. Offending ids: ${unsorted.slice(0, 5).map((r) => r.id).join(", ")}` +
+      `${unsorted.length > 5 ? ` (+${unsorted.length - 5} more)` : ""}.`
+  );
+}
 
 export function emptyCodingSummary(): CodingBatchSummary {
   return {
@@ -498,6 +564,10 @@ export async function codeArticles(
 ): Promise<CodingBatchSummary> {
   const summary = emptyCodingSummary();
   if (rows.length === 0) return summary;
+
+  // Before loadActiveThemes(), before any Gemini call: a selection that got
+  // past its own filter should cost nothing to reject.
+  assertSorted(rows);
 
   // One immutable vocabulary for the whole batch.
   //
@@ -530,6 +600,12 @@ export async function codeArticles(
         ai_themes: result.themes,
         ai_summary: result.summary,
         coded_status: "coded",
+        // Stamped here rather than by the recode, so EVERY path that codes an
+        // article records which methodology produced it. A version written
+        // only by the recode would leave normal coding runs indistinguishable
+        // from pre-versioning rows, and the next recode would redo them for
+        // no reason.
+        coding_version: CODING_VERSION,
       })
       .eq("id", row.id);
 
